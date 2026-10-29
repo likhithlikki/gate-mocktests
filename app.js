@@ -117,6 +117,9 @@
   var SCORING_BACKEND_READY = false;
   var EXAM_POLICY_APPROVED = false;
   var ANSWER_REVIEW_POLICY_APPROVED = false;
+  var POLICY_PUBLIC_LOADED = false;
+  var POLICY_PUBLIC_ERROR = '';
+  var POLICY_PUBLIC_FIELDS = Object.freeze(['ANSWER_REVIEW_POLICY_APPROVED', 'EXAM_ENGINE_AVAILABLE', 'EXAM_POLICY_APPROVED', 'MARKING_RULES_CONFIRMED', 'SCORING_BACKEND_READY']);
 
   function nonEmpty(v, max) {
     return typeof v === 'string' && v.trim().length > 0 && (!max || v.trim().length <= max);
@@ -216,7 +219,7 @@
                total: 0, sources: [], placeholder: false };
     }
     if (typeof fetchFn !== 'function') { return Promise.resolve(fail('unreachable')); }
-    return Promise.resolve().then(function () { return fetchFn(url || BANK_URL, { cache: 'no-cache' }); })
+    return Promise.resolve().then(function () { return fetchFn(url || BANK_URL); })
       .then(function (res) {
         if (res.status === 404) { return fail('missing'); }
         if (!res.ok) { return fail('error'); }
@@ -448,7 +451,7 @@
   /* One shard: fetch, size, DIGEST, parse, check, in that order. Resolves (never rejects) to { entry, ok, code, check }. */
   function loadOneShard(fetchFn, entry, base, digestFn) {
     function bad(code, check) { return { entry: entry, ok: false, code: code, check: check || null }; }
-    return Promise.resolve().then(function () { return fetchFn(base + entry.path, { cache: 'no-cache' }); })
+    return Promise.resolve().then(function () { return fetchFn(base + entry.path); })
       .then(function (res) {
         if (res.status === 404 || res.status === 410) { return bad('shard_missing'); }
         if (!res.ok) { return bad('shard_error'); }
@@ -983,24 +986,29 @@
   /* A source-verified rule reference is NOT the same as an owner-approved executable scoring profile.
    * `verified`/`sourceVerified` refer only to source review; `canScore` stays false until explicit owner approval,
    * the rule gate, the secure server scorer, and the online engine are all ready. */
-  function markingProfileFor(year) {
-    var key = wholeNumber(year) ? String(year) : null, reg = key && has.call(MARKING_PROFILES, key) ? MARKING_PROFILES[key] : null;
-    if (reg && reg.sourceVerified === true && reg.year === year && !validateMarkingProfile(reg).length) {
+  function markingProfileFor(year, assignedProfile) {
+    var targetYear = wholeNumber(year) ? year : null;
+    var explicitlyAssigned2026 = assignedProfile === 'GATE-2026@1';
+    var key = explicitlyAssigned2026 ? '2026' : (targetYear === null ? null : String(targetYear));
+    var reg = key && has.call(MARKING_PROFILES, key) ? MARKING_PROFILES[key] : null;
+    if (reg && reg.sourceVerified === true && reg.year === (explicitlyAssigned2026 ? 2026 : targetYear) && !validateMarkingProfile(reg).length) {
       var pending = MARKING_DECISIONS.filter(function (d) { return reg.unresolved.indexOf(d.id) >= 0; }).map(function (d) { return d.label; });
       var ownerApproved = EXAM_POLICY_APPROVED && MARKING_RULES_CONFIRMED;
       var canScore = pending.length === 0 && ownerApproved && SCORING_BACKEND_READY && EXAM_ENGINE_AVAILABLE && ATTEMPT_POLICY.enforcedNow;
-      return { year: reg.year, status: 'reference_only', verified: true, sourceVerified: true, ownerApproved: ownerApproved,
+      return { year: targetYear === null ? reg.year : targetYear, sourceYear: reg.year, profile: explicitlyAssigned2026 ? 'GATE-2026@1' : reg.profile_id + '@' + reg.profile_version,
+               explicitlyAssigned: explicitlyAssigned2026, status: 'reference_only', verified: true, sourceVerified: true, ownerApproved: ownerApproved,
                canScore: canScore, operationalStatus: canScore ? 'enabled' : 'blocked', rules: reg.rules, source: reg.source,
                marksToAll: reg.marksToAll === true, pending: pending,
                provenance: reg.provenance, interpretationNote: reg.interpretationNote || null };
     }
-    return { year: wholeNumber(year) ? year : null, status: 'unverified', verified: false, sourceVerified: false, ownerApproved: false,
+    return { year: targetYear, sourceYear: null, profile: null, explicitlyAssigned: false, status: 'unverified', verified: false, sourceVerified: false, ownerApproved: false,
              canScore: false, operationalStatus: 'blocked', rules: null, source: null, marksToAll: false,
              pending: MARKING_DECISIONS.map(function (d) { return d.label; }), provenance: null, interpretationNote: null };
   }
-  function scoringBlockers(year) {
-    var p = markingProfileFor(year), name = p.year === null ? 'this paper' : 'GATE ' + p.year, list = [];
+  function scoringBlockers(year, assignedProfile) {
+    var p = markingProfileFor(year, assignedProfile), name = p.year === null ? 'this paper' : 'GATE ' + p.year, list = [];
     if (!p.sourceVerified) { list.push("The marking profile for " + name + " is unverified; real scoring is blocked. This site will not borrow another year's rules."); }
+    else if (p.explicitlyAssigned && p.sourceYear !== p.year) { list.push('This paper explicitly reuses the verified GATE 2026 marking rules for a different paper year; the server-approved profile is required for scoring.'); }
     else if (p.pending.length) { list.push(name + ' still has undecided rules: ' + p.pending.join('; ') + '.'); }
     if (!EXAM_POLICY_APPROVED) { list.push('The scoring specification is DRAFT for owner review and NOT APPROVED; approval is required before operational scoring.'); }
     if (!MARKING_RULES_CONFIRMED) { list.push('The owner-controlled MCQ/MSQ/NAT marking confirmation gate is OFF. Source-reviewed reference rules are not enabled for scoring.'); }
@@ -1011,8 +1019,73 @@
     return list;
   }
 
-  function policyStatus(year) {
-    var p = markingProfileFor(year), blocked = scoringBlockers(year);
+  function policyPublicExactKeys(value, keys) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { return false; }
+    var got = Object.keys(value).sort(), want = keys.slice().sort();
+    return got.length === want.length && got.every(function (k, i) { return k === want[i]; });
+  }
+  function resetPolicyPublic(errorCode) {
+    MARKING_RULES_CONFIRMED = false;
+    EXAM_ENGINE_AVAILABLE = false;
+    SCORING_BACKEND_READY = false;
+    EXAM_POLICY_APPROVED = false;
+    ANSWER_REVIEW_POLICY_APPROVED = false;
+    POLICY_PUBLIC_LOADED = false;
+    POLICY_PUBLIC_ERROR = errorCode || '';
+  }
+  function policyPublicState() {
+    return { loaded: POLICY_PUBLIC_LOADED, error: POLICY_PUBLIC_ERROR,
+      MARKING_RULES_CONFIRMED: MARKING_RULES_CONFIRMED, EXAM_ENGINE_AVAILABLE: EXAM_ENGINE_AVAILABLE,
+      SCORING_BACKEND_READY: SCORING_BACKEND_READY, EXAM_POLICY_APPROVED: EXAM_POLICY_APPROVED,
+      ANSWER_REVIEW_POLICY_APPROVED: ANSWER_REVIEW_POLICY_APPROVED };
+  }
+  function policyPublicErrorCode(error) {
+    if (error && error.kind === 'not_configured') { return 'not_configured'; }
+    if (error && (error.kind === 'not_signed_in' || error.code === 'unauthenticated')) { return 'not_signed_in'; }
+    if (error && error.kind === 'timeout') { return 'timeout'; }
+    if (error && error.kind === 'connection') { return 'connection'; }
+    if (error && error.kind === 'bad_response') { return 'bad_response'; }
+    return 'server_error';
+  }
+  function notifyPolicyPublicChange() {
+    try { if (root.dispatchEvent && typeof root.Event === 'function') { root.dispatchEvent(new root.Event('gateprep:policy-updated')); } } catch (e) { /* status listeners are best-effort; policy remains fail closed */ }
+  }
+  function loadPolicyPublic() {
+    resetPolicyPublic('');
+    var auth = root.GateAuth, session = null;
+    try { session = auth && typeof auth.readSession === 'function' ? auth.readSession() : null; } catch (e) { session = null; }
+    if (!auth || typeof auth.callStrict !== 'function' || typeof auth.isConfigured !== 'function' || !auth.isConfigured()) {
+      resetPolicyPublic('not_configured'); notifyPolicyPublicChange(); return Promise.resolve(false);
+    }
+    if (!session || typeof session.token !== 'string' || !session.token) {
+      resetPolicyPublic('not_signed_in'); notifyPolicyPublicChange(); return Promise.resolve(false);
+    }
+    return Promise.resolve().then(function () {
+      return auth.callStrict('policy_public', {}, session.token, POLICY_PUBLIC_FIELDS);
+    }).then(function (response) {
+      if (!policyPublicExactKeys(response, ['code', 'data']) || response.code !== 'ok' ||
+          !policyPublicExactKeys(response.data, POLICY_PUBLIC_FIELDS) ||
+          POLICY_PUBLIC_FIELDS.some(function (key) { return typeof response.data[key] !== 'boolean'; })) {
+        throw { kind: 'bad_response' };
+      }
+      MARKING_RULES_CONFIRMED = response.data.MARKING_RULES_CONFIRMED;
+      EXAM_ENGINE_AVAILABLE = response.data.EXAM_ENGINE_AVAILABLE;
+      SCORING_BACKEND_READY = response.data.SCORING_BACKEND_READY;
+      EXAM_POLICY_APPROVED = response.data.EXAM_POLICY_APPROVED;
+      ANSWER_REVIEW_POLICY_APPROVED = response.data.ANSWER_REVIEW_POLICY_APPROVED;
+      POLICY_PUBLIC_LOADED = true;
+      POLICY_PUBLIC_ERROR = '';
+      notifyPolicyPublicChange();
+      return true;
+    }).catch(function (error) {
+      resetPolicyPublic(policyPublicErrorCode(error));
+      notifyPolicyPublicChange();
+      return false;
+    });
+  }
+
+  function policyStatus(year, assignedProfile) {
+    var p = markingProfileFor(year, assignedProfile), blocked = scoringBlockers(year, assignedProfile);
     if (!ANSWER_REVIEW_POLICY_APPROVED) { blocked.push('Answer review is blocked pending approval of D-18 / AK-08; answer keys and explanations are not exposed.'); }
     var profileStatus = !p.sourceVerified ? 'unverified'
       : p.canScore ? 'owner_approved_and_operational'
@@ -1031,8 +1104,10 @@
       attemptPolicyApproved: EXAM_POLICY_APPROVED,
       attemptPolicyEnforced: ATTEMPT_POLICY.enforcedNow,
       answerReviewApproved: ANSWER_REVIEW_POLICY_APPROVED,
+      policyPublicLoaded: POLICY_PUBLIC_LOADED,
+      policyPublicError: POLICY_PUBLIC_ERROR,
       canScore: p.canScore,
-      canStartOnlineExam: p.canScore && EXAM_POLICY_APPROVED && MARKING_RULES_CONFIRMED && EXAM_ENGINE_AVAILABLE && ATTEMPT_POLICY.enforcedNow,
+      canStartOnlineExam: POLICY_PUBLIC_LOADED && p.canScore && EXAM_POLICY_APPROVED && MARKING_RULES_CONFIRMED && EXAM_ENGINE_AVAILABLE && SCORING_BACKEND_READY && ATTEMPT_POLICY.enforcedNow,
       canReviewAnswers: ANSWER_REVIEW_POLICY_APPROVED && SCORING_BACKEND_READY,
       blockers: blocked
     };
@@ -1360,13 +1435,17 @@
             snapshot: examSnapshot, restore: examRestore, startCheck: attemptStartCheck, finalSubmitAccepted: finalSubmitAccepted,
             policy: ATTEMPT_POLICY, policyStatus: policyStatus },
     marking: { decisions: MARKING_DECISIONS, profileFor: markingProfileFor, validateProfile: validateMarkingProfile,
-               scoringBlockers: scoringBlockers, policyStatus: policyStatus, awardedMarks: awardedMarks, sumMarks: sumMarks, classifyResponse: classifyResponse, scoreResponse: scoreResponse,
+               scoringBlockers: scoringBlockers, policyStatus: policyStatus, loadPolicyPublic: loadPolicyPublic, policyPublicState: policyPublicState,
+               awardedMarks: awardedMarks, sumMarks: sumMarks, classifyResponse: classifyResponse, scoreResponse: scoreResponse,
                describeProfile: describeProfile, frac: frac, fracValue: fracValue, fracText: fracText }
   };
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; }
   root.GatePrep = api;
 
   if (typeof document === 'undefined') { return; }
+
+  /* The browser status is display-only. A missing session, timeout or malformed response stays fail-closed. */
+  if (document.getElementById && document.getElementById('ox-paper')) { loadPolicyPublic(); }
 
   /* ---------- DOM helpers ---------- */
   function $(id) { return document.getElementById(id); }

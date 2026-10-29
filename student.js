@@ -22,6 +22,14 @@
   function statusText(a) { return a.status === 'in_progress' ? 'In progress' : a.status === 'scored' ? 'Closed, scored' : a.close_reason === 'expired' ? 'Closed (time expired)' : 'Closed (submitted)'; }
   function link(href, text) { var a = el('a', text); a.href = href; return a; }
 
+  var dash = null;
+  function dashboard() { if (!dash) { dash = api.getDashboard(); } return dash; }
+  function unwrap(part) {
+    if (part && part.ok) { return Promise.resolve(part.data || {}); }
+    var e = new Error('server'); e.kind = 'server'; e.code = (part && part.code) || 'server_error'; e.reason = (part && part.reason) || '';
+    return Promise.reject(e);
+  }
+
   function attemptsTable(list, withResult, onResult) {
     var wrap = el('div', undefined, 'table-scroll'), t = el('table', undefined, 'exam-table'), h = el('tr');
     ['Started', 'Mode', 'Paper', 'Marks', 'Status', ''].forEach(function (x) { h.appendChild(el('th', x)); });
@@ -47,11 +55,11 @@
     note('Signed in. The sections below show only what the server holds for your account; anything it cannot supply is marked unavailable.');
 
     if (page === 'dashboard.html') {
-      live('live-profile', function () { return api.getProfile().then(function (p) { var b = el('div'); b.appendChild(el('h2', 'Profile overview')); b.appendChild(dl([['Username', p.username], ['Full name', p.full_name], ['Member since', when(p.created_at)]])); b.appendChild(el('p', 'Branch and target exam year are not part of the account yet, so they are not shown.', 'fine')); return b; }); }, 'Loading your profile');
-      var att = api.listAttempts();
+      live('live-profile', function () { return dashboard().then(function (d) { return unwrap(d.profile); }).then(function (p) { var b = el('div'); b.appendChild(el('h2', 'Profile overview')); b.appendChild(dl([['Username', p.username], ['Full name', p.full_name], ['Member since', when(p.created_at)]])); b.appendChild(el('p', 'Branch and target exam year are not part of the account yet, so they are not shown.', 'fine')); return b; }); }, 'Loading your profile');
+      var att = dashboard().then(function (d) { return unwrap(d.attempts); });
       live('live-progress', function () { return att.then(function (d) { var c = d.counts, b = el('div'); b.appendChild(el('h2', 'Progress overview')); b.appendChild(dl([['Online tests started', String(c.total)], ['In progress', String(c.in_progress)], ['Closed', String(c.closed)], ['Scored', String(c.scored)]])); b.appendChild(el('p', 'Accuracy, study time and subject progress are not calculated yet.', 'fine')); return b; }); }, 'Loading your progress');
       live('live-recent', function () { return att.then(function (d) { var b = el('div'); b.appendChild(el('h2', 'Recent exam history')); if (!d.attempts.length) { b.appendChild(el('p', 'You have not started any online test.')); b.appendChild(link('practice.html#online-card', 'Go to the practice page')); } else { b.appendChild(attemptsTable(d.attempts.slice(0, 5), false)); b.appendChild(link('history.html', 'Full history')); } return b; }); }, 'Loading your history');
-      live('live-bookmarks', function () { return api.listBookmarks().then(function (d) { var b = el('div'); b.appendChild(el('h2', 'Bookmarks')); b.appendChild(el('p', 'You have ' + d.count + ' bookmarked question' + (d.count === 1 ? '' : 's') + '. ')); b.appendChild(link('bookmarks.html', 'Open bookmarks')); return b; }); }, 'Loading your bookmarks');
+      live('live-bookmarks', function () { return dashboard().then(function (d) { return unwrap(d.bookmarks); }).then(function (d) { var b = el('div'); b.appendChild(el('h2', 'Bookmarks')); b.appendChild(el('p', 'You have ' + d.count + ' bookmarked question' + (d.count === 1 ? '' : 's') + '. ')); b.appendChild(link('bookmarks.html', 'Open bookmarks')); return b; }); }, 'Loading your bookmarks');
     }
 
     if (page === 'history.html') {

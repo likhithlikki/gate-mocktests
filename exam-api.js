@@ -106,7 +106,8 @@
     listBookmarks: function () { return call('list_bookmarks', {}).then(d); },
     addBookmark: function (qid) { return call('add_bookmark', { question_id: qid }).then(d); },
     removeBookmark: function (qid) { return call('remove_bookmark', { question_id: qid }).then(d); },
-    getProfile: function () { return call('profile_get', {}).then(d); }
+    getProfile: function () { return call('profile_get', {}).then(d); },
+    getDashboard: function () { return call('dashboard_get', {}).then(d); }
   });
   root.GateExamApi = api;
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; }

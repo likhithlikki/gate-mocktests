@@ -81,7 +81,7 @@
   }
 
   /* POST one operation. Resolves with the response data (or {}) on ok:true; rejects with {kind:'server', code, reason} or a transport kind. */
-  function call(op, payload, sessionToken) {
+  function call(op, payload, sessionToken, strictDataKeys) {
     if (!configured()) { return Promise.reject(failure('not_configured')); }
     if (typeof root.fetch !== 'function') { return Promise.reject(failure('connection')); }
     var rid;
@@ -100,6 +100,15 @@
         try { env = JSON.parse(text); } catch (e) { throw failure('bad_response'); }
         if (!env || typeof env !== 'object' || Array.isArray(env) || typeof env.ok !== 'boolean' || typeof env.code !== 'string') { throw failure('bad_response'); }
         if (env.requestId !== undefined && env.requestId !== rid) { throw failure('bad_response'); }
+        if (Array.isArray(strictDataKeys)) {
+          var allowedEnvelope = env.ok ? { ok: 1, code: 1, requestId: 1, data: 1 } : { ok: 1, code: 1, requestId: 1, reason: 1, missing_prerequisites: 1 };
+          if (Object.keys(env).some(function (k) { return !allowedEnvelope[k]; })) { throw failure('bad_response'); }
+          if (env.ok) {
+            if (!env.data || typeof env.data !== 'object' || Array.isArray(env.data)) { throw failure('bad_response'); }
+            var actualKeys = Object.keys(env.data).sort(), wantedKeys = strictDataKeys.slice().sort();
+            if (actualKeys.length !== wantedKeys.length || actualKeys.some(function (k, i) { return k !== wantedKeys[i]; })) { throw failure('bad_response'); }
+          }
+        }
         if (!env.ok) { throw failure('server', env.code.slice(0, 48), typeof env.reason === 'string' ? env.reason.slice(0, 64) : ''); }
         return { code: env.code, data: env.data && typeof env.data === 'object' ? env.data : {} };
       }, function (e) {
@@ -417,7 +426,14 @@
     if (email) { email.addEventListener('input', function () { registerState.proof = ''; }); }   /* a proof belongs to one address */
   }
 
-  var api = Object.freeze({ isConfigured: configured, call: call, readSession: readSession, clearSession: clearSession, refreshSession: refreshSession, logout: logout, deriveH1: deriveH1 });
+  function callStrict(op, payload, sessionToken, expectedDataKeys) {
+    if (!Array.isArray(expectedDataKeys) || !expectedDataKeys.length || expectedDataKeys.some(function (k) { return typeof k !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(k); })) {
+      return Promise.reject(failure('bad_response'));
+    }
+    return call(op, payload, sessionToken, expectedDataKeys);
+  }
+
+  var api = Object.freeze({ isConfigured: configured, endpointUrl: function () { return AUTH_ENDPOINT_URL; }, call: call, callStrict: callStrict, readSession: readSession, clearSession: clearSession, refreshSession: refreshSession, logout: logout, deriveH1: deriveH1 });
   root.GateAuth = api;
   root.GateAuthUI = Object.freeze(ui);
   if (root.document) {

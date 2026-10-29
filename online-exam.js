@@ -76,6 +76,40 @@
       });
       return order.sort().map(function (v) { return { value: v, label: v + ' (' + out[v] + ')' }; });
     }
+    function policyBlockMessage(gates) {
+      var codes = [], flow = root.GateAdminFlow;
+      if (!gates || !gates.policyPublicLoaded) {
+        codes.push(gates && gates.policyPublicError ? gates.policyPublicError : 'not_configured');
+      } else {
+        if (!gates.attemptPolicyApproved) { codes.push('scoring_spec_unapproved'); }
+        if (!gates.markingRulesConfirmed) { codes.push('marking_rules_unconfirmed'); }
+        if (!gates.scoringBackendReady) { codes.push('scoring_backend_not_ready'); }
+        if (!gates.examEngineAvailable) { codes.push('exam_engine_not_available'); }
+      }
+      if (gates && !gates.attemptPolicyEnforced) { codes.push('attempt_policy_unenforced'); }
+      if (gates && gates.sourceVerified === false) { codes.push('profile_unverified'); }
+      if (!codes.length) { codes.push('feature_disabled'); }
+      var seen = Object.create(null), details = [];
+      codes.forEach(function (code) {
+        if (seen[code]) { return; }
+        seen[code] = true;
+        var item = flow && typeof flow.explain === 'function' ? flow.explain(code) : null;
+        if (item) { details.push(code + ': ' + item.reason + ' Where: ' + item.where + ' Fix: ' + item.fix); }
+        else {
+          var fallback = {
+            not_configured: 'The private policy service is not configured. Where: the signed-in policy endpoint. Fix: configure and deploy the private backend.',
+            not_signed_in: 'A valid login session is required. Where: the login/session service. Fix: sign in and try again.',
+            timeout: 'The policy service did not reply in time. Where: the private Apps Script deployment. Fix: check availability and retry.',
+            connection: 'The policy service cannot be reached. Where: the private Apps Script deployment. Fix: check the deployment URL and connectivity.',
+            bad_response: 'The policy service reply was invalid. Where: policy_public response. Fix: deploy the matching backend and frontend versions.',
+            server_error: 'The policy check failed. Where: the private Apps Script service. Fix: inspect its safe health report before retrying.'
+          };
+          details.push(code + ': ' + (fallback[code] || 'The status is not mapped. Where: the status report. Fix: copy the report for the maintainer.'));
+        }
+      });
+      return 'Exam cannot start. No start request was sent. Use local practice/preview instead. ' + details.join(' ');
+    }
+
     function refresh() {
       var p = cur(), m = mode();
       show('ox-filters', m === 'practice');
@@ -93,9 +127,9 @@
         '. The paper has ' + p.question_count + ' questions and ' + p.total_marks + ' marks. This is a count, not the test: the server makes the final selection and fixes marks, profile and duration when you start.' +
         (m === 'paper' && p.duration_seconds ? ' Duration for the whole paper, calculated by the server: ' + fmtDuration(p.duration_seconds) + '.' : ''));
       var gates = root.GatePrep && root.GatePrep.marking && typeof root.GatePrep.marking.policyStatus === 'function'
-        ? root.GatePrep.marking.policyStatus(parseInt(p.year, 10)) : null;
+        ? root.GatePrep.marking.policyStatus(parseInt(p.year, 10), p.profile || '') : null;
       if (!gates || !gates.canStartOnlineExam) {
-        fill('ox-block', 'Online attempts are blocked by the owner-controlled policy gates. The scoring specification is not approved, marking confirmation and secure server scoring are not ready, and attempt enforcement is not enabled. No start request was sent. Use local practice/preview instead.');
+        fill('ox-block', policyBlockMessage(gates));
         show('ox-block', true); return;
       }
       if (!modeInfo.available) {
@@ -104,6 +138,8 @@
       if (!mm.count) { fill('ox-block', 'No question matches these filters. Set a filter back to \u201cAny\u201d.'); show('ox-block', true); return; }
       $('ox-start').disabled = false;
     }
+
+    if (typeof root.addEventListener === 'function') { root.addEventListener('gateprep:policy-updated', refresh); }
 
     function load() {
       if (busy) { return; } busy = true; $('ox-load').disabled = true;

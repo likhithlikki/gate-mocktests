@@ -5,10 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <meta name="robots" content="noindex">
+  <!-- frame-ancestors is not enforced from a meta CSP; configure it as an HTTP response header at the host. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'none'; form-action 'self'">
   <title>System status | GATE Prep Studio</title>
   <meta name="description" content="Live health check of every backend service behind GATE Prep Studio.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f4e9c'/%3E%3Cpath d='M9 17l5 5 9-12' fill='none' stroke='%23fff' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff7a4d'/%3E%3Cpath d='M9 17l5 5 9-12' fill='none' stroke='%23fff' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://script.google.com" crossorigin>
+  <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
   <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -39,12 +44,23 @@
     <section class="section">
       <div class="wrap">
         <h1>System status</h1>
-        <p class="lead">A live check of every backend this site depends on. Green means working, amber means reachable but something is switched off, red means broken.</p>
+        <p class="lead">A live check of everything this site depends on: its settings and files, and each backend. Open any card to see every check, what is wrong and how to fix it. Green means working, amber means reachable but something is switched off or needs attention, red means broken.</p>
         <p id="status-overall" class="status-overall" data-state="run" role="status" aria-live="polite">&hellip; Running checks&hellip;</p>
         <noscript><p class="formula" role="note">This page needs JavaScript to run its checks.</p></noscript>
         <ul id="status-list" class="status-list"></ul>
-        <p class="status-actions"><button type="button" id="status-recheck" class="btn btn-primary">Check again</button> <span id="status-time" class="fine"></span></p>
-        <p class="fine">These checks are read-only. They send no password, code or personal data, and show no account information.</p>
+        <p class="status-actions"><button type="button" id="status-recheck" class="btn btn-primary">Check again</button> <button type="button" id="status-copy" class="btn btn-quiet">Copy report</button> <span id="status-time" class="fine"></span> <span id="status-copied" class="fine" role="status"></span></p>
+        <details class="status-reportbox">
+          <summary>Report text (paste this to whoever is helping you)</summary>
+          <textarea id="status-report" class="status-report" readonly rows="10" aria-label="Status report text"></textarea>
+        </details>
+        <p class="fine">These checks are read-only. They send no password, code or personal data. The deep backend checks are off until the owner sets the Script Property STATUS_DIAGNOSTICS to true in that Apps Script project; they never reveal secrets, property values, sheet ids or account data. Turn the property off again when you have finished setting up.</p>
+      </div>
+    </section>
+    <section id="admin-console" class="section" hidden aria-labelledby="admin-console-heading">
+      <div class="wrap">
+        <h2 id="admin-console-heading">Admin console</h2>
+        <p class="lead">Owner only. Use this console to import questions, register exam papers, manage answer keys, and check backend readiness.</p>
+        <div id="admin-console-mount"></div>
       </div>
     </section>
   </main>
@@ -82,5 +98,19 @@
   <script src="api.js" defer></script>
   <script src="auth.js" defer></script>
   <script src="status.js" defer></script>
+  <script src="admin-spec.js" defer></script>
+  <script src="admin-parse.js" defer></script>
+  <script src="admin-xlsx.js" defer></script>
+  <script src="admin-validate.js" defer></script>
+  <script src="admin-api.js" defer></script>
+  <script src="admin-flow-spec.js" defer></script>
+  <script src="admin-console.js" defer></script>
+  <script src="admin-tab-journey.js" defer></script>
+  <script src="admin-tab-gates.js" defer></script>
+  <script src="admin-tab-questions.js" defer></script>
+  <script src="admin-tab-papers.js" defer></script>
+  <script src="admin-tab-keys.js" defer></script>
+  <script src="admin-tab-keygrid.js" defer></script>
+  <script src="admin-tab-health.js" defer></script>
 </body>
 </html>
