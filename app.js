@@ -891,6 +891,12 @@
     enforcedNow: false
   });
 
+  /* Read-only diagnostic consumed by the owner-only Admin health report. This is informational only. */
+  root.GateAttemptPolicyStatus = Object.freeze({
+    enforcedNow: ATTEMPT_POLICY.enforcedNow === true,
+    approvalStatus: String(ATTEMPT_POLICY.approvalStatus || 'unknown')
+  });
+
   /* ---- Year-specific marking profiles ----
    * Each profile holds scoring RULES only, never question-specific answers, NAT ranges or explanations. Those
    * live in the official answer-key PDFs and must be held server-side (none are held anywhere yet).

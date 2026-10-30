@@ -24,7 +24,15 @@
         }
         if (Array.isArray(section.gates) && section.gates.length) {
           var gates = ctx.el('ul', 'admin-health-items');
-          section.gates.forEach(function (gate) { var state = gate.state === 'on' ? 'ok' : 'off'; var li = ctx.el('li'); li.appendChild(ctx.el('span', 'admin-health-badge state-' + state, symbol(state) + ' ' + (gate.state === 'on' ? 'On' : 'Off'))); li.appendChild(root.document.createTextNode(' ' + String(gate.name || 'Policy gate'))); gates.appendChild(li); }); card.appendChild(gates);
+          section.gates.forEach(function (gate) {
+            var state = gate.status || (gate.state === 'on' ? 'ok' : (gate.state === 'off' ? 'off' : 'warn'));
+            var label = gate.label || (gate.state === 'on' ? 'On' : (gate.state === 'off' ? 'Off' : String(gate.state || 'Unknown')));
+            var li = ctx.el('li');
+            li.appendChild(ctx.el('span', 'admin-health-badge state-' + state, symbol(state) + ' ' + label));
+            li.appendChild(root.document.createTextNode(' ' + String(gate.name || 'Policy gate')));
+            gates.appendChild(li);
+          });
+          card.appendChild(gates);
         }
         cards.appendChild(card);
       });
@@ -36,7 +44,9 @@
         if (s.detail) { lines.push('Detail: ' + s.detail); }
         if (s.fix) { lines.push('Fix: ' + s.fix); }
         (Array.isArray(s.items) ? s.items : []).forEach(function (it) { lines.push('- ' + it.id + ': ' + word(it.status)); });
-        (Array.isArray(s.gates) ? s.gates : []).forEach(function (g) { lines.push('- ' + g.name + ': ' + (g.state === 'on' ? 'On' : 'Off')); });
+        (Array.isArray(s.gates) ? s.gates : []).forEach(function (g) {
+          lines.push('- ' + g.name + ': ' + (g.label || (g.state === 'on' ? 'On' : (g.state === 'off' ? 'Off' : String(g.state || 'Unknown')))));
+        });
       });
       lines.push('', '(Report contains only the health details shown on this page; no account data or property values.)');
       return lines.join('\n');
@@ -56,7 +66,25 @@
       checkButton.disabled = true; setMessage('Checking owner-only backend readiness…', '');
       ctx.api.checks().then(function (r) {
         if (ctx.responseCode(r) !== 'ok') { throw Object.assign(new Error('Health check failed.'), { code: ctx.responseCode(r) }); }
-        var d = ctx.responseData(r); renderSections(d.sections || []);
+        var d = ctx.responseData(r);
+        var sections = Array.isArray(d.sections) ? d.sections.slice() : [];
+        var browserPolicy = root.GateAttemptPolicyStatus;
+        if (browserPolicy) {
+          var policySection = sections.find(function (s) { return s && s.id === 'policy_gates'; });
+          if (policySection) {
+            policySection.gates = Array.isArray(policySection.gates) ? policySection.gates.slice() : [];
+            policySection.gates.push({
+              name: 'Browser attempt policy — ATTEMPT_POLICY.enforcedNow (informational)',
+              kind: 'release_hold',
+              state: browserPolicy.enforcedNow ? 'reported_enforced' : 'not_enforced',
+              status: 'warn',
+              label: browserPolicy.enforcedNow
+                ? 'Reported enforced by frontend; server remains authoritative'
+                : 'Not enforced — local preview only'
+            });
+          }
+        }
+        renderSections(sections);
         var fail = lastSections.filter(function (s) { return s.status === 'fail'; }).length;
         var warn = lastSections.filter(function (s) { return s.status === 'warn'; }).length;
         var off = lastSections.filter(function (s) { return s.status === 'off'; }).length;
