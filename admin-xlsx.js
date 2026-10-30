@@ -66,20 +66,27 @@
     return scriptLoad;
   }
 
-  function readArrayBuffer(file) {
-    if (file && typeof file.arrayBuffer === 'function') { return file.arrayBuffer(); }
+  function readArrayBuffer(file, onProgress) {
     return new Promise(function (resolve, reject) {
       if (typeof root.FileReader !== 'function') { reject(makeError('read_failed', 'This browser cannot read local files.')); return; }
       var reader = new root.FileReader();
+      reader.onprogress = function (event) { if (typeof onProgress === 'function' && event && event.lengthComputable) { try { onProgress({ loaded: event.loaded, total: event.total }); } catch (e) { /* progress must not interrupt reading */ } } };
       reader.onerror = function () { reject(makeError('read_failed', 'The Excel file could not be read.')); };
-      reader.onload = function () { resolve(reader.result); };
+      reader.onload = function () {
+        if (typeof onProgress === 'function') { try { onProgress({ loaded: file.size, total: file.size }); } catch (e) { /* progress must not interrupt reading */ } }
+        resolve(reader.result);
+      };
       try { reader.readAsArrayBuffer(file); } catch (e) { reject(makeError('read_failed', 'The Excel file could not be read.')); }
     });
   }
 
-  function readXlsx(file, kind) {
+  function readXlsx(file, kind, onProgress) {
     try { checkFile(file); } catch (e) { return Promise.reject(e); }
-    return Promise.all([loadLibrary(), readArrayBuffer(file)]).then(function (loaded) {
+    return Promise.all([loadLibrary(), readArrayBuffer(file, onProgress)]).then(function (loaded) {
+      if (typeof onProgress === 'function') { try { onProgress({ phase: 'parsing', loaded: file.size, total: file.size }); } catch (e) { /* progress must not interrupt parsing */ } }
+      var schedule = typeof root.setTimeout === 'function' ? root.setTimeout.bind(root) : setTimeout;
+      return new Promise(function (resolve) { schedule(function () { resolve(loaded); }, 0); });
+    }).then(function (loaded) {
       var XLSX = loaded[0], buffer = loaded[1], workbook;
       try {
         workbook = XLSX.read(buffer, { type: 'array', cellFormula: true, cellText: true, cellNF: true, sheetRows: MAX_ROWS + 1 });

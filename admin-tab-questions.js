@@ -18,7 +18,7 @@
   }
   function mountQuestions(panel, ctx) {
     var allRecords = null, parserProblems = [], activeRecords = [], validatedProblems = [], hasValidated = false, importing = false, ticket = 0;
-    var fileInput, parseState, filterBox, branchBox, yearBox, dryBox, problemsBox, importButton, validateButton, progress, reportButton, fileName;
+    var fileInput, parseState, filterBox, branchBox, yearBox, dryBox, problemsBox, importButton, validateButton, progressUi, reportButton, fileName, importCount;
     var selectedBranches = Object.create(null), selectedYears = Object.create(null);
 
     function clearData(clearMessage) {
@@ -30,7 +30,7 @@
       if (importButton) { importButton.disabled = true; }
       if (validateButton) { validateButton.disabled = true; }
       if (reportButton) { reportButton.disabled = true; }
-      if (progress) { progress.value = 0; progress.max = 1; }
+      if (progressUi) { progressUi.reset(); }
       if (fileName) { fileName.textContent = ''; }
       if (clearMessage !== false && parseState) { parseState.textContent = 'Choose a JSON, CSV, or XLSX question file to begin.'; parseState.className = 'admin-message'; }
     }
@@ -146,12 +146,22 @@
       parseState.textContent = 'Reading and parsing the selected file…'; parseState.className = 'admin-message';
       var ext = String(file.name || '').toLowerCase();
       var parsePromise;
+      if (progressUi) { progressUi.update({ phase: 'reading', done: 0, total: file.size, unit: 'bytes', message: 'Reading the selected file' }); }
+      function schedulePaint() { return new Promise(function (resolve) { var schedule = typeof root.setTimeout === 'function' ? root.setTimeout.bind(root) : setTimeout; schedule(resolve, 0); }); }
+      function reading(p) {
+        if (!progressUi || !p || !p.total) { return; }
+        if (p.phase === 'parsing') { progressUi.update({ phase: 'parsing', done: p.loaded, total: p.total, unit: 'bytes', message: 'Parsing workbook structure' }); }
+        else { progressUi.update({ phase: 'reading', done: p.loaded, total: p.total, unit: 'bytes', message: 'Reading the selected file' }); }
+      }
       if (/\.xlsx$/.test(ext)) {
-        parsePromise = ctx.xlsx.readXlsx(file, 'questions').then(function (result) { return result.parsed; });
+        parsePromise = ctx.xlsx.readXlsx(file, 'questions', reading).then(function (result) { return result.parsed; });
       } else if (/\.(xlsm|xlsb)$/.test(ext)) {
         parsePromise = Promise.reject(Object.assign(new Error('Only .xlsx workbooks are accepted.'), { code: 'unsupported_excel_type' }));
       } else {
-        parsePromise = ctx.parser.readFile(file).then(function (text) { return ctx.parser.parseQuestions(text, file.name); });
+        parsePromise = ctx.parser.readFile(file, reading).then(function (text) {
+          if (progressUi) { progressUi.update({ phase: 'parsing', done: file.size, total: file.size, unit: 'bytes', message: 'Parsing JSON/CSV structure' }); }
+          return schedulePaint().then(function () { return ctx.parser.parseQuestions(text, file.name); });
+        });
       }
       parsePromise.then(function (parsed) {
         if (thisTicket !== ticket) { return; }
@@ -159,6 +169,7 @@
         parserProblems = Array.isArray(parsed.problems) ? parsed.problems.slice() : [];
         validatedProblems = parserProblems.slice();
         renderFilters();
+        if (progressUi) { progressUi.update({ phase: 'reading', done: file.size, total: file.size, unit: 'bytes', message: 'File read and parsed; ready for validation' }); }
         parseState.textContent = 'Parsed as ' + String(parsed.meta && parsed.meta.format || 'unknown') + ': ' + allRecords.length + ' record(s), ' + parserProblems.length + ' structural problem(s).';
         parseState.className = 'admin-message' + (parserProblems.length ? ' is-error' : ' is-success');
         validateButton.disabled = false;
@@ -169,10 +180,12 @@
         clearData(false);
         parseState.textContent = errorText + (error && error.code ? ' (' + error.code + ')' : '');
         parseState.className = 'admin-message is-error';
+        if (progressUi) { progressUi.update({ phase: 'stopped', done: 0, total: 0, message: errorText }); }
       });
     }
 
     ctx.clear(panel);
+    progressUi = root.GateAdminProgress && typeof root.GateAdminProgress.create === 'function' ? root.GateAdminProgress.create(panel) : null;
     panel.appendChild(ctx.el('h3', '', 'Accepted input and templates'));
     var guide = ctx.el('div', 'admin-guide-grid');
     ctx.spec.FORMAT_GUIDE.forEach(function (entry, index) {
@@ -192,28 +205,51 @@
     filterBox = ctx.el('div', 'admin-filter-panel'); panel.appendChild(filterBox);
     var actions = ctx.el('div', 'admin-action-row');
     validateButton = ctx.button('Validate selected records', function () {
+      if (importing) { return; }
       activeRecords = currentRecords();
-      var val = ctx.validator.validateQuestions(activeRecords);
-      var parserErrs = parserProblems.map(function (p) { return { row: p.row, field: p.field, code: p.code }; });
-      renderDryReport(val, activeRecords, parserErrs);
+      validateButton.disabled = true; importButton.disabled = true;
+      if (progressUi) { progressUi.update({ phase: 'checking', done: 0, total: activeRecords.length, unit: 'questions', message: 'Checking selected records' }); }
+      var validateAsync = root.GateAdminProgress && typeof root.GateAdminProgress.validateInSlices === 'function' ?
+        root.GateAdminProgress.validateInSlices(activeRecords, ctx.validator, function (p) { if (progressUi) { progressUi.update(p); } }, 500) :
+        Promise.resolve(ctx.validator.validateQuestions(activeRecords));
+      validateAsync.then(function (val) {
+        var parserErrs = parserProblems.map(function (p) { return { row: p.row, field: p.field, code: p.code }; });
+        renderDryReport(val, activeRecords, parserErrs);
+        if (progressUi) { progressUi.update({ phase: 'checking', done: activeRecords.length, total: activeRecords.length, unit: 'questions', message: parserErrs.length ? 'Validation complete; structural errors remain' : (val.ok ? 'Validation complete; no question-rule errors' : 'Validation complete; review the reported errors') }); }
+        parseState.textContent = 'Validation complete: ' + val.problems.length + ' question-rule problem(s), ' + parserErrs.length + ' structural problem(s).';
+        parseState.className = 'admin-message' + (val.problems.length || parserErrs.length ? ' is-error' : ' is-success');
+      }).catch(function (error) {
+        validateButton.disabled = false;
+        parseState.textContent = error && error.message ? error.message : ctx.plainError(error);
+        parseState.className = 'admin-message is-error';
+        if (progressUi) { progressUi.update({ phase: 'stopped', done: 0, total: activeRecords.length, message: 'Validation could not finish' }); }
+      });
     }, 'btn-primary'); validateButton.disabled = true;
     importButton = ctx.button('Import 0 questions', function () {
       if (!hasValidated || validatedProblems.length || !activeRecords.length || importing) { return; }
       importing = true; importButton.disabled = true; validateButton.disabled = true; fileInput.disabled = true;
-      progress.max = activeRecords.length; progress.value = 0; progress.setAttribute('aria-label', 'Question import progress');
-      parseState.textContent = 'Import in progress. Do not close this page.';
+      var unloadGuard = function (event) { event.preventDefault(); event.returnValue = ''; return ''; };
+      if (typeof root.addEventListener === 'function') { root.addEventListener('beforeunload', unloadGuard); }
+      parseState.textContent = 'Import in progress. Confirmed progress is reported after each server response.';
+      if (progressUi) { progressUi.update({ phase: 'uploading', done: 0, total: activeRecords.length, chunk: 0, chunks: 0, retry: 0, inFlight: false }); }
       ctx.api.importQuestions(activeRecords, function (p) {
-        progress.max = Math.max(1, p.total); progress.value = p.done;
-        progress.setAttribute('aria-valuetext', p.done + ' of ' + p.total + ' questions sent');
+        if (progressUi) { progressUi.update(p); }
         importCount.textContent = 'Created ' + p.created + ' · updated ' + p.updated + ' · unchanged ' + p.unchanged + ' · issues ' + p.issues;
       }).then(function (result) {
         parseState.textContent = 'Import completed: ' + result.progress.created + ' created, ' + result.progress.updated + ' updated, ' + result.progress.unchanged + ' unchanged.';
         parseState.className = 'admin-message is-success';
-      }).catch(function (error) {
-        parseState.textContent = ctx.plainError(error);
-        parseState.className = 'admin-message is-error';
-      }).then(function () {
         importing = false; clearParsedAfterImport();
+      }).catch(function (error) {
+        var counts = error && error.progress ? error.progress : { done: 0, total: activeRecords.length };
+        var confirmed = Number(counts.done) || 0, total = Number(counts.total) || activeRecords.length;
+        var safeMessage = 'Stopped after ' + confirmed + ' of ' + total + ' questions confirmed. The importer is designed to handle unchanged questions on a repeat import; check the report before retrying. ' + ctx.plainError(error);
+        parseState.textContent = safeMessage;
+        parseState.className = 'admin-message is-error';
+        importing = false; fileInput.disabled = false; validateButton.disabled = false;
+        importButton.disabled = !hasValidated || validatedProblems.length > 0 || !activeRecords.length;
+        if (progressUi) { progressUi.update({ phase: 'stopped', done: confirmed, total: total, chunk: error && error.progress ? error.progress.chunks : 0, chunks: error && error.progress ? error.progress.chunks : 0, inFlight: false, message: 'Import did not finish' }); }
+      }).then(function () {
+        if (typeof root.removeEventListener === 'function') { root.removeEventListener('beforeunload', unloadGuard); }
       });
     }, 'btn-primary'); importButton.disabled = true;
     reportButton = ctx.button('Download problems as CSV', function () {
@@ -221,8 +257,7 @@
       try { ctx.downloadText('question-import-problems.csv', csv, 'text/csv;charset=utf-8'); } catch (e) { ctx.message(problemsBox, 'The browser could not start the CSV download.', 'error'); }
     }, 'btn-quiet'); reportButton.disabled = true;
     actions.appendChild(validateButton); actions.appendChild(importButton); actions.appendChild(reportButton); panel.appendChild(actions);
-    progress = ctx.el('progress', 'admin-progress'); progress.max = 1; progress.value = 0; panel.appendChild(progress);
-    var importCount = ctx.el('p', 'admin-countline', 'Created 0 · updated 0 · unchanged 0 · issues 0'); panel.appendChild(importCount);
+    importCount = ctx.el('p', 'admin-countline', 'Created 0 · updated 0 · unchanged 0 · issues 0'); panel.appendChild(importCount);
     dryBox = ctx.el('div', 'admin-dryrun'); panel.appendChild(dryBox);
     problemsBox = ctx.el('div', 'admin-problems'); panel.appendChild(problemsBox);
     fileInput.addEventListener('change', function () { parseChosenFile(fileInput.files && fileInput.files[0]); });

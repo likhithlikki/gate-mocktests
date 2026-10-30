@@ -136,20 +136,23 @@
     if (typeof data.issues === 'number' && isFinite(data.issues)) { stats.issues = data.issues; }
     else if (Array.isArray(data.issues)) { stats.issues = data.issues.length; }
   }
-  function progress(onProgress, stats) {
+  function progress(onProgress, stats, extra) {
     if (typeof onProgress !== 'function') { return; }
     var snapshot = { done: stats.done, total: stats.total, created: stats.created, updated: stats.updated,
-      unchanged: stats.unchanged, issues: stats.issues };
+      unchanged: stats.unchanged, issues: stats.issues, chunk: 0, chunks: stats.chunks || 0, phase: 'uploading', retry: 0, inFlight: false, completedChunks: 0, maxRetries: MAX_RETRIES + 1 };
+    if (extra && typeof extra === 'object') { Object.keys(extra).forEach(function (key) { snapshot[key] = extra[key]; }); }
     try { onProgress(snapshot); } catch (e) { /* a progress display must not interrupt an import */ }
   }
   function isFatalImportError(err) {
     var code = codeOf(err);
     return code === 'validation_failed' || code === 'forbidden_not_owner';
   }
-  function sendChunk(batchId, seq, questions) {
+  function sendChunk(batchId, seq, questions, onAttempt, chunks, stats) {
     var payload = { batch_id: batchId, seq: seq, questions: questions };
     var attempt = 0;
     function tryOnce() {
+      attempt++;
+      progress(onAttempt, stats, { chunk: seq, chunks: chunks, phase: 'uploading', retry: attempt, inFlight: true, completedChunks: seq - 1 });
       return call(OPS.importChunk, payload).then(function (result) {
         var code = codeOf(result);
         if (code === 'ok') { return result; }
@@ -159,9 +162,12 @@
         throw apiError(code || 'bad_response', null, result);
       }).catch(function (err) {
         if (isFatalImportError(err)) { throw err; }
-        if (attempt >= MAX_RETRIES) { throw err; }
-        attempt++;
-        return tryOnce();
+        if (attempt >= MAX_RETRIES + 1) { throw err; }
+        var nextAttempt = attempt + 1;
+        progress(onAttempt, stats, { chunk: seq, chunks: chunks, phase: 'uploading', retry: nextAttempt, inFlight: false, completedChunks: seq - 1 });
+        var delayMs = Math.min(2000, 250 * Math.pow(2, attempt - 1));
+        var schedule = typeof root.setTimeout === 'function' ? root.setTimeout.bind(root) : setTimeout;
+        return new Promise(function (resolve) { schedule(resolve, delayMs); }).then(tryOnce);
       });
     }
     return tryOnce();
@@ -172,29 +178,36 @@
     try { batchId = randomBatchId(); } catch (e) { return Promise.reject(e); }
     var chunks;
     try { chunks = splitChunks(list, batchId); } catch (e2) { return Promise.reject(e2); }
-    var stats = { done: 0, total: list.length, created: 0, updated: 0, unchanged: 0, issues: 0 };
-    progress(onProgress, stats);
+    var stats = { done: 0, total: list.length, chunks: chunks.length, completedChunks: 0, currentChunk: 0, created: 0, updated: 0, unchanged: 0, issues: 0 };
+    progress(onProgress, stats, { chunk: 0, chunks: chunks.length, phase: 'uploading', retry: 0, inFlight: false, completedChunks: 0 });
     var chain = Promise.resolve();
     chunks.forEach(function (chunk, i) {
       (function (localChunk, seq) {
         chain = chain.then(function () {
-          return sendChunk(batchId, seq, localChunk).then(function (result) {
+          stats.currentChunk = seq;
+          return sendChunk(batchId, seq, localChunk, onProgress, chunks.length, stats).then(function (result) {
             updateStats(stats, result);
             stats.done += localChunk.length;
-            progress(onProgress, stats);
+            stats.completedChunks = seq;
+            progress(onProgress, stats, { chunk: seq, chunks: chunks.length, phase: 'uploading', retry: 0, inFlight: false, completedChunks: stats.completedChunks });
           });
         });
       })(chunk, i + 1);
     });
     return chain.then(function () {
+      progress(onProgress, stats, { chunk: chunks.length, chunks: chunks.length, phase: 'finishing', retry: 0, inFlight: true, completedChunks: stats.completedChunks });
       return call(OPS.importFinish, { batch_id: batchId, chunks: chunks.length, question_count: list.length });
     }).then(function (finished) {
       var finishCode = codeOf(finished);
       if (finishCode !== 'ok') { throw apiError(finishCode || 'bad_response', null, finished); }
       applyFinalStats(stats, finished);
-      progress(onProgress, stats);
+      progress(onProgress, stats, { chunk: chunks.length, chunks: chunks.length, phase: 'done', retry: 0, inFlight: false, completedChunks: stats.completedChunks });
       return { batch_id: batchId, chunks: chunks.length, progress: { done: stats.done, total: stats.total,
         created: stats.created, updated: stats.updated, unchanged: stats.unchanged, issues: stats.issues }, result: finished };
+    }).catch(function (error) {
+      if (error && typeof error === 'object') { error.progress = { done: stats.done, total: stats.total, created: stats.created, updated: stats.updated, unchanged: stats.unchanged, issues: stats.issues, chunks: chunks.length }; }
+      progress(onProgress, stats, { chunk: stats.currentChunk || chunks.length, chunks: chunks.length, phase: 'stopped', retry: 0, inFlight: false, completedChunks: stats.completedChunks });
+      throw error;
     });
   }
 

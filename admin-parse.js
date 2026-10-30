@@ -16,15 +16,21 @@
   function stripBom(text) { return text && text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text; }
   function blankRow(row) { return !row || row.every(function (v) { return String(v == null ? '' : v) === ''; }); }
 
-  function readFile(file) {
+  function readFile(file, onProgress) {
     return new Promise(function (resolve, reject) {
       if (!file || typeof file.size !== 'number') { reject(codedError('bad_file', 'Choose a file to read.')); return; }
       if (file.size > MAX_FILE_BYTES) { reject(codedError('too_large', 'File is larger than 25 MB.')); return; }
       if (typeof root.FileReader !== 'function') { reject(codedError('file_reader_unavailable', 'This browser cannot read local files.')); return; }
       var reader = new root.FileReader();
+      reader.onprogress = function (event) {
+        if (typeof onProgress === 'function' && event && event.lengthComputable) {
+          try { onProgress({ loaded: event.loaded, total: event.total }); } catch (e) { /* progress must not interrupt reading */ }
+        }
+      };
       reader.onerror = function () { reject(codedError('read_failed', 'The file could not be read. Try saving it again.')); };
       reader.onabort = function () { reject(codedError('read_aborted', 'File reading was cancelled.')); };
       reader.onload = function () {
+        if (typeof onProgress === 'function') { try { onProgress({ loaded: file.size, total: file.size }); } catch (e2) { /* progress must not interrupt reading */ } }
         if (typeof reader.result !== 'string') { reject(codedError('read_failed', 'The file did not decode as text.')); return; }
         resolve(stripBom(reader.result));
       };
