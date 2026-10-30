@@ -34,6 +34,14 @@
     if (error && error.reason === 'license_ref_unset') { return 'Set QUESTION_LICENSE_REF in Apps Script first.'; }
     return 'The operation could not be completed. Check the server configuration and try again.';
   }
+  /* Labelled progress bar with elapsed time (loading.js). With totalSteps it fills as steps finish; without, it is indeterminate.
+   * Returns {go(n,text), text(t), done(), fail()}; every method is safe if loading.js is missing. */
+  var SILENT_PROGRESS = { go: function () {}, text: function () {}, done: function () {}, fail: function () {}, node: null };
+  function progress(parent, label, totalSteps) {
+    var a = root.GateActivity;
+    if (!a || typeof a.inline !== 'function') { return SILENT_PROGRESS; }
+    try { return a.inline(parent, label, totalSteps); } catch (e) { return SILENT_PROGRESS; }
+  }
   function csvCell(value) {
     var s = String(value == null ? '' : value);
     return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -112,7 +120,7 @@
       shellContext = {
         api: root.GateAdminApi, spec: root.GateAdminSpec, parser: root.GateAdminParse,
         xlsx: root.GateAdminXlsx, validator: root.GateAdminValidate,
-        el: el, clear: clear, button: button, message: message,
+        el: el, clear: clear, button: button, message: message, progress: progress,
         responseData: responseData, responseCode: responseCode, plainError: plainError,
         csvCell: csvCell, downloadText: downloadText
       };
@@ -121,7 +129,7 @@
     }).catch(function () { section.hidden = true; });
   }
   var api = Object.freeze({ registerTab: registerTab, init: init, helpers: Object.freeze({ el: el, clear: clear, button: button,
-    message: message, responseData: responseData, responseCode: responseCode, plainError: plainError,
+    message: message, progress: progress, responseData: responseData, responseCode: responseCode, plainError: plainError,
     csvCell: csvCell, downloadText: downloadText }) });
   root.GateAdminConsole = api;
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; }

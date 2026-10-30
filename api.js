@@ -59,9 +59,12 @@
     return new Promise(function (resolve, reject) {
       var script = document.createElement('script');
       var timer = null, settled = false, hadCallback = Object.prototype.hasOwnProperty.call(root, CALLBACK_NAME);
+      /* Show the global loading bar (loading.js) while the public catalogue request is running. */
+      var endActivity = root.GateActivity && typeof root.GateActivity.begin === 'function' ? root.GateActivity.begin('catalogue') : null;
 
       function cleanup() {
         busy = false;
+        if (endActivity) { endActivity(); endActivity = null; }
         if (timer) { root.clearTimeout(timer); }
         if (script.parentNode) { script.parentNode.removeChild(script); }
         if (!hadCallback) { try { delete root[CALLBACK_NAME]; } catch (e) { root[CALLBACK_NAME] = undefined; } }

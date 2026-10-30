@@ -793,6 +793,18 @@ main > .section > .wrap > :nth-child(2) { animation-delay: .6s; } main > .sectio
 .admin-progress-live { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @keyframes admin-progress-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .admin-progress-waiting-dot { animation: none; } }
+/* Local answer-key PDF fingerprint progress */
+.admin-pdf-progress { display: grid; gap: .45rem; margin: .65rem 0; padding: .8rem 1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-solid); box-shadow: 0 8px 22px rgba(0, 0, 0, .16); }
+.admin-pdf-progress[hidden] { display: none; }
+.admin-pdf-progress.is-active { border-color: var(--brand); }
+.admin-pdf-progress.is-success { border-color: var(--st-answered); }
+.admin-pdf-progress.is-error { border-color: var(--error-ink); }
+.admin-pdf-progress-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.admin-pdf-progress-phase { font-weight: 700; }
+.admin-pdf-progress-percent { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.admin-pdf-progress-bar { display: block; width: 100%; height: .85rem; accent-color: var(--brand); }
+.admin-pdf-progress-detail { margin: 0; color: var(--muted); font-size: .9rem; overflow-wrap: anywhere; }
+.admin-pdf-progress-live { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .admin-key-flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .65rem; padding-left: 1.4rem; }
 .admin-key-flow li { min-width: 0; padding: .65rem; color: var(--muted); border: 1px solid var(--line); border-radius: 10px; }
 .admin-key-grid-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
@@ -894,3 +906,75 @@ main > .section > .wrap > :nth-child(2) { animation-delay: .6s; } main > .sectio
 .service-indicators { margin: 1rem auto; padding: 0.8rem 0; border-top: 1px solid var(--line, #ccc); }
 .service-indicators p { margin: 0.35rem 0; }
 .service-indicators h2 { margin-top: 0; }
+
+
+/* ---------- Global loading progress (loading.js) ----------
+ * Top bar for any request or page load, spinner on the pressed button, "still working" notice, and the
+ * labelled inline progress bar used by the admin Health and Journey tabs. Class-driven only (strict CSP). */
+.gl-topbar { position: fixed; top: 0; left: 0; right: 0; height: 4px; z-index: 10000; overflow: hidden; pointer-events: none; opacity: 0; transition: opacity .25s var(--ease); }
+.gl-topbar.on { opacity: 1; }
+.gl-topbar-fill {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 38%; border-radius: 0 4px 4px 0;
+  background: var(--brand-grad); box-shadow: 0 0 14px rgba(var(--glow), .85), 0 0 3px rgba(255, 255, 255, .6);
+  animation: gl-slide 1.25s cubic-bezier(.45, .05, .35, 1) infinite;
+}
+@keyframes gl-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(290%); } }
+
+.gl-toast {
+  position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%); z-index: 10000; max-width: min(92vw, 34rem);
+  display: flex; align-items: center; gap: .65rem; padding: .7rem 1rem; border-radius: var(--radius);
+  background: linear-gradient(160deg, rgba(40, 18, 30, .92), rgba(40, 18, 30, .8));
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  border: 1px solid var(--line-strong); box-shadow: var(--shadow), var(--edge); color: var(--ink); font-size: .92rem;
+}
+.gl-toast[hidden] { display: none; }
+.gl-toast-spin { flex: none; width: 1.05rem; height: 1.05rem; border-radius: 50%; border: 2.5px solid rgba(255, 238, 230, .25); border-top-color: #ffa24f; animation: spin .8s linear infinite; }
+
+/* A pressed button whose request is still running keeps its label and shows a spinner */
+.btn.is-busy { position: relative; padding-right: 2.7rem; pointer-events: none; opacity: .9; }
+.btn.is-busy::after {
+  content: ""; position: absolute; inset: auto; right: .9rem; top: 50%; width: 1rem; height: 1rem; margin-top: -.5rem; border-radius: 50%;
+  background: none; border: 2.5px solid rgba(255, 255, 255, .35); border-top-color: #fff; animation: spin .7s linear infinite;
+}
+.btn-primary.is-busy::after { border-color: rgba(38, 11, 20, .3); border-top-color: var(--on-brand); }
+.btn.is-busy:hover { transform: none; }
+
+.gl-inline {
+  margin: .8rem 0; padding: .8rem .95rem; border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--tint); box-shadow: var(--edge);
+}
+.gl-inline-head { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; }
+.gl-inline-time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: .88rem; }
+.gl-track { position: relative; height: 8px; margin: .55rem 0 .45rem; border-radius: 999px; overflow: hidden; background: rgba(255, 238, 230, .14); }
+.gl-fill { position: absolute; top: 0; bottom: 0; left: 0; width: 0; border-radius: 999px; background: var(--brand-grad); box-shadow: 0 0 10px rgba(var(--glow), .6); transition: width .45s var(--ease); }
+.gl-fill.is-indeterminate { width: 38%; transition: none; animation: gl-slide 1.25s cubic-bezier(.45, .05, .35, 1) infinite; }
+.gl-inline-detail { margin: 0; font-size: .92rem; color: var(--ink); min-height: 1.2em; }
+.gl-inline-hint { margin: .45rem 0 0; font-size: .85rem; color: var(--muted); }
+.gl-inline-hint[hidden] { display: none; }
+.gl-fill.p0 { width: 0%; }
+.gl-fill.p5 { width: 5%; }
+.gl-fill.p10 { width: 10%; }
+.gl-fill.p15 { width: 15%; }
+.gl-fill.p20 { width: 20%; }
+.gl-fill.p25 { width: 25%; }
+.gl-fill.p30 { width: 30%; }
+.gl-fill.p35 { width: 35%; }
+.gl-fill.p40 { width: 40%; }
+.gl-fill.p45 { width: 45%; }
+.gl-fill.p50 { width: 50%; }
+.gl-fill.p55 { width: 55%; }
+.gl-fill.p60 { width: 60%; }
+.gl-fill.p65 { width: 65%; }
+.gl-fill.p70 { width: 70%; }
+.gl-fill.p75 { width: 75%; }
+.gl-fill.p80 { width: 80%; }
+.gl-fill.p85 { width: 85%; }
+.gl-fill.p90 { width: 90%; }
+.gl-fill.p95 { width: 95%; }
+.gl-fill.p100 { width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gl-topbar-fill, .gl-fill.is-indeterminate { animation: none; width: 100%; opacity: .75; }
+  .gl-toast-spin, .btn.is-busy::after { animation-duration: 2s; }
+  .gl-fill { transition: none; }
+}

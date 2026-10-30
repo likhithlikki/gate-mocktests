@@ -28,7 +28,21 @@
    * only the chunk/finish operations a larger but still bounded window. */
   var IMPORT_TIMEOUT_MS = 180000;
   var IMPORT_OPERATIONS = { admin_import_questions_chunk: 1, admin_import_chunk: 1, admin_import_finish: 1 };
-  function timeoutForOperation(op) { return Object.prototype.hasOwnProperty.call(IMPORT_OPERATIONS, op) ? IMPORT_TIMEOUT_MS : TIMEOUT_MS; }
+  /* Owner-console operations (health checks, exam-journey flow check, paper lists, rehearsal) open several Google Sheets
+   * and often hit an Apps Script cold start. 25 seconds was too short for them and produced "The server took too long
+   * to respond" on the Health and Journey tabs. They now get a longer window. Imports keep their own, longer window. */
+  var ADMIN_TIMEOUT_MS = 75000;
+  function timeoutForOperation(op) {
+    if (Object.prototype.hasOwnProperty.call(IMPORT_OPERATIONS, op)) { return IMPORT_TIMEOUT_MS; }
+    return typeof op === 'string' && op.indexOf('admin_') === 0 ? ADMIN_TIMEOUT_MS : TIMEOUT_MS;
+  }
+  /* READ-ONLY operations never change data on the server, so repeating one is always safe. Only these are retried
+   * automatically and de-duplicated. Anything that writes (import, stage/approve keys, register, gates, remove,
+   * rehearsal start/submit) is NEVER retried by the browser: a lost reply may still have been saved. */
+  var READ_ONLY_OPERATIONS = { admin_whoami: 1, admin_checks: 1, admin_flow_check: 1, admin_papers_list: 1, admin_questions_index: 1,
+    admin_questions_ids: 1, admin_gates_get: 1, admin_rehearsal_preview: 1 };
+  function isReadOnlyOperation(op) { return Object.prototype.hasOwnProperty.call(READ_ONLY_OPERATIONS, op); }
+  var MAX_READ_ATTEMPTS = 3;
   function transportFailure(err, timedOut) {
     if (err && err.kind) { return err; }
     if (timedOut || (err && err.name === 'AbortError')) { return failure('timeout', '', 'request_timeout'); }
@@ -93,7 +107,7 @@
   }
 
   /* POST one operation. Resolves with the response data (or {}) on ok:true; rejects with {kind:'server', code, reason} or a transport kind. */
-  function call(op, payload, sessionToken, strictDataKeys) {
+  function callOnce(op, payload, sessionToken, strictDataKeys) {
     if (!configured()) { return Promise.reject(failure('not_configured')); }
     if (typeof root.fetch !== 'function') { return Promise.reject(failure('connection')); }
     var rid;
@@ -141,6 +155,44 @@
       clearRequestTimer();
       throw transportFailure(err, timedOut);
     });
+  }
+
+  function activity() { return root.GateActivity && typeof root.GateActivity.note === 'function' ? root.GateActivity : null; }
+  function sleep(ms) { return new Promise(function (resolve) { root.setTimeout(resolve, ms); }); }
+  var inFlightReads = Object.create(null);
+  function cloneResult(value) { try { return JSON.parse(JSON.stringify(value)); } catch (e) { return value; } }
+  function markReadOnly(err, op) {
+    if (err && typeof err === 'object') { try { err.readOnly = true; err.op = op; } catch (e) { /* frozen error: ignore */ } }
+    return err;
+  }
+  /* Read-only operation: retry once after a timeout (the server is usually warm on the second request) and up to twice
+   * after a dropped connection or an explicit busy reply. Identical reads that are already running share one request. */
+  function callReadOnly(op, payload, sessionToken, strictDataKeys) {
+    var key = op + '|' + (sessionToken || '') + '|' + (function () { try { return JSON.stringify(payload || {}); } catch (e) { return ''; } })();
+    if (inFlightReads[key]) { return inFlightReads[key].then(cloneResult); }
+    var timeoutRetries = 0;
+    function attempt(n) {
+      return callOnce(op, payload, sessionToken, strictDataKeys).catch(function (err) {
+        var kind = err && err.kind, code = err && err.code;
+        var transient = kind === 'timeout' || kind === 'connection' || (kind === 'server' && (code === 'busy' || code === 'try_later'));
+        var allowed = n < MAX_READ_ATTEMPTS && transient && (kind !== 'timeout' || timeoutRetries < 1);
+        if (!allowed) { throw markReadOnly(err, op); }
+        if (kind === 'timeout') { timeoutRetries++; }
+        var a = activity();
+        if (a) { a.note(kind === 'timeout'
+          ? 'The server is slow to wake up. This read-only check is being retried automatically (nothing was changed)…'
+          : 'The connection was interrupted. Retrying this read-only check automatically…'); }
+        return sleep(1200 * n).then(function () { return attempt(n + 1); });
+      });
+    }
+    var p = attempt(1);
+    inFlightReads[key] = p;
+    function clear() { if (inFlightReads[key] === p) { delete inFlightReads[key]; } }
+    p.then(clear, clear);
+    return p;
+  }
+  function call(op, payload, sessionToken, strictDataKeys) {
+    return isReadOnlyOperation(op) ? callReadOnly(op, payload, sessionToken, strictDataKeys) : callOnce(op, payload, sessionToken, strictDataKeys);
   }
 
   /* ---------- password derivation (Web Crypto) ---------- */

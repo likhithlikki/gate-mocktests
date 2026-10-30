@@ -44,6 +44,7 @@
     bad_response: 'The server returned an unreadable response. Check the deployment and try again.',
     connection: 'The server could not be reached. Check your connection and retry.',
     timeout: 'The server took too long to respond. Check the import status before retrying.',
+    timeout_readonly: 'The server did not answer even after an automatic retry. This was a read-only check, so nothing was changed. Wait a few seconds for the server to warm up and press the button again.',
     try_later: 'The server is temporarily unavailable. The import will retry shortly.',
     busy: 'The server is busy. The import will retry shortly.',
     not_configured: 'The authentication service is not configured. Ask the site owner to check its deployment URL.',
@@ -71,6 +72,9 @@
     if (code === 'feature_disabled' && reason === 'license_ref_unset') { return 'Set QUESTION_LICENSE_REF in Apps Script first, then retry the question import.'; }
     if (!code && err && err.data && typeof err.data.code === 'string') { code = err.data.code; }
     if (!code && err && err.kind === 'timeout') { code = 'timeout'; }
+    /* Read-only checks (Health, Journey, paper lists) are retried automatically by auth.js and never write data, so the
+     * "check the import status" advice would be misleading for them. */
+    if (code === 'timeout' && err && err.readOnly === true) { code = 'timeout_readonly'; }
     if (!code && err && ['connection', 'bad_response', 'server_error'].indexOf(err.kind) >= 0) { code = err.kind; }
     return ERROR_MESSAGES[code] || ERROR_MESSAGES.server_error;
   }

@@ -59,7 +59,7 @@
   }
   function mountJourney(panel, ctx) {
     var status, fixtureStatus, banner, paperSelect, list, runButton, rehearsalButton, createButton, approveRehearsalButton, removeButton, verifierInput, removeConfirmInput, previewButton, attemptButton, previewPanel, attemptPanel,
-      lastSteps = [], running = false, provisioning = false, canApproveRehearsal = false;
+      progressArea, lastSteps = [], running = false, provisioning = false, canApproveRehearsal = false;
     function tell(text, state) { ctx.clear(status); ctx.message(status, text, state || 'info'); }
     function tellFixture(text, state) { if (!fixtureStatus) { tell(text, state); return; } ctx.clear(fixtureStatus); ctx.message(fixtureStatus, text, state || 'info'); }
     function renderBanner(steps) {
@@ -163,24 +163,26 @@
       if (provisioning) { return; }
       var verifiedBy = verifierInput.value.trim().toLowerCase();
       if (!verifiedBy || verifiedBy.length > 256) { tellFixture('Enter a real independent reviewer identity. The verifier must not be the current owner; the server checks separation again.', 'error'); return; }
-      setProvisioning(true); tellFixture('Checking whether the reserved rehearsal already exists…', 'info');
+      setProvisioning(true); ctx.clear(fixtureStatus);
+      var P = ctx.progress(progressArea, 'Creating the rehearsal fixture', 6);
+      P.go(0, 'Checking whether the reserved rehearsal already exists');
       ctx.api.papersList().then(function (r) {
         if (!isSuccess(r, ['ok'])) { throw Object.assign(new Error('Could not read registered papers.'), { code: ctx.responseCode(r) }); }
         var papers = ctx.responseData(r).papers || [];
         if (papers.some(function (p) { return p.paper_id === REHEARSAL_ID; })) {
           throw Object.assign(new Error('The reserved rehearsal already exists. Remove its data first or run the read-only Journey check.'), { code: 'conflict' });
         }
-        tellFixture('Importing three clearly fake MCQ, MSQ and NAT questions…', 'info');
+        P.go(1, 'Importing three clearly fake MCQ, MSQ and NAT questions');
         return ctx.api.importQuestions(rehearsalQuestions(), function (progress) {
-          tellFixture('Importing rehearsal fixture: ' + progress.done + ' / ' + progress.total + ' questions; created ' + progress.created + ', updated ' + progress.updated + ', unchanged ' + progress.unchanged + '.', 'info');
+          P.text('Importing rehearsal fixture: ' + progress.done + ' / ' + progress.total + ' questions; created ' + progress.created + ', updated ' + progress.updated + ', unchanged ' + progress.unchanged + '.');
         });
       }).then(function () {
-        tellFixture('Registering the reserved rehearsal paper with the pinned GATE-2026@1 profile…', 'info');
+        P.go(2, 'Registering the reserved rehearsal paper with the pinned GATE-2026@1 profile');
         return ctx.api.registerPaper({ paper_id: REHEARSAL_ID, year: 2026, paper_code: 'rehearsal', session: '1',
           title: 'GATE 2026 REHEARSAL — FAKE DATA ONLY', question_ids: REHEARSAL_QUESTION_IDS.slice(), marking_profile_id: 'GATE-2026', marking_profile_version: '1' });
       }).then(function (r) {
         if (!isSuccess(r, ['ok', 'registered', 'unchanged', 'membership_completed'])) { throw Object.assign(new Error('Rehearsal paper registration failed.'), { code: ctx.responseCode(r) }); }
-        tellFixture('Staging the synthetic answer keys. The source is a reserved example.invalid fixture, not an official PDF.', 'info');
+        P.go(3, 'Staging the synthetic answer keys (reserved example.invalid fixture, not an official PDF)');
         return ctx.api.stageKeys(REHEARSAL_BATCH_ID, [
           { question_id: REHEARSAL_QUESTION_IDS[0], answer: 'B' },
           { question_id: REHEARSAL_QUESTION_IDS[1], answer: 'A;C' },
@@ -188,10 +190,11 @@
         ], { paper_id: REHEARSAL_ID, verified_by: verifiedBy, source: REHEARSAL_SOURCE });
       }).then(function (r) {
         if (!isSuccess(r, ['ok', 'unchanged', 'already_staged'])) { throw Object.assign(new Error('Rehearsal key staging failed.'), { code: ctx.responseCode(r) }); }
-        tellFixture('Validating the staged fixture keys…', 'info');
+        P.go(4, 'Validating the staged fixture keys');
         return ctx.api.validateKeys(REHEARSAL_BATCH_ID);
       }).then(function (r) {
         if (!isSuccess(r, ['ok', 'validated', 'unchanged'])) { throw Object.assign(new Error('Rehearsal key validation failed.'), { code: ctx.responseCode(r) }); }
+        P.go(5, 'Refreshing the paper list');
         tellFixture('Rehearsal data is staged and validated. A different active owner must finish approval: the account that staged this batch cannot approve its own keys. Sign in as the independent approver, then use the approval button below. Exam-start remains OFF.', 'warning');
         return ctx.api.papersList();
       }).then(function (r) {
@@ -206,33 +209,40 @@
           else if (!canApproveRehearsal) { tellFixture('The fixture exists, but the paper does not report staged or validated keys. Inspect key state before approving.', 'error'); }
         }
       }).catch(function (e) {
+        P.fail();
         tellFixture(ctx.plainError(e) + ' The operation uses idempotent import; inspect the paper/key state before retrying or use the reserved cleanup action after confirming the fixture.', 'error');
-      }).then(function () { setProvisioning(false); });
+      }).then(function () { P.done(); setProvisioning(false); });
     }
     function approveRehearsal() {
       if (provisioning) { return; }
       setProvisioning(true);
+      var AP = ctx.progress(progressArea, 'Approving the rehearsal keys', 4);
+      AP.go(0, 'Checking that the reserved rehearsal paper exists');
       tellFixture('Rechecking the reserved synthetic key batch. Approval uses the normal server-side two-person checks; use an owner account different from the enterer and the recorded verifier.', 'info');
       ctx.api.papersList().then(function (r) {
         if (!isSuccess(r, ['ok'])) { throw Object.assign(new Error('Could not read registered papers.'), { code: ctx.responseCode(r) }); }
         var exists = (ctx.responseData(r).papers || []).some(function (p) { return p.paper_id === REHEARSAL_ID; });
         if (!exists) { throw Object.assign(new Error('The reserved rehearsal paper does not exist. Create and validate the fixture first.'), { code: 'not_found' }); }
+        AP.go(1, 'Validating the staged keys');
         return ctx.api.validateKeys(REHEARSAL_BATCH_ID);
       }).then(function (r) {
         if (!isSuccess(r, ['ok', 'validated', 'unchanged'])) { throw Object.assign(new Error('The reserved rehearsal key batch is not ready for approval.'), { code: ctx.responseCode(r) }); }
+        AP.go(2, 'Approving through the two-person server check');
         return ctx.api.approveKeys(REHEARSAL_BATCH_ID);
       }).then(function (r) {
         if (!isSuccess(r, ['ok', 'approved', 'unchanged']) || (r.data && r.data.committed === false)) {
           throw Object.assign(new Error('Server did not confirm the rehearsal key approval.'), { code: ctx.responseCode(r) });
         }
+        AP.go(3, 'Refreshing the paper list');
         tellFixture('Synthetic rehearsal keys approved through the normal backend path. This does not enable candidate starts; the code-level release hold remains OFF.', 'success');
         return ctx.api.papersList();
       }).then(function (r) {
         var latestPaper = isSuccess(r, ['ok']) ? (ctx.responseData(r).papers || []).filter(function (p) { return p.paper_id === REHEARSAL_ID; })[0] : null;
         canApproveRehearsal = !!latestPaper && ['staged', 'validated'].indexOf(latestPaper.key_state) >= 0;
+        AP.done();
         setProvisioning(false);
         run(false);
-      }).catch(function (e) { tellFixture(ctx.plainError(e) + ' Keep the release hold OFF; check the batch and the distinct-enterer/verifier/approver rule before retrying.', 'error'); setProvisioning(false); });
+      }).catch(function (e) { AP.fail(); tellFixture(ctx.plainError(e) + ' Keep the release hold OFF; check the batch and the distinct-enterer/verifier/approver rule before retrying.', 'error'); setProvisioning(false); });
     }
 
     function renderRehearsalPreview(data) {
@@ -261,6 +271,7 @@
       setProvisioning(true);
       ctx.clear(previewPanel);
       previewPanel.appendChild(ctx.el('p', 'fine', 'Loading the owner-only synthetic fixture preview…'));
+      var PV = ctx.progress(previewPanel, 'Loading the rehearsal preview');
       ctx.api.rehearsalPreview().then(function (r) {
         if (!isSuccess(r, ['ok'])) { throw Object.assign(new Error('Could not load the rehearsal preview.'), { code: ctx.responseCode(r) }); }
         renderRehearsalPreview(ctx.responseData(r));
@@ -268,7 +279,7 @@
       }).catch(function (e) {
         ctx.clear(previewPanel);
         previewPanel.appendChild(ctx.el('p', 'fine is-error', ctx.plainError(e)));
-      }).then(function () { setProvisioning(false); });
+      }).then(function () { PV.done(); setProvisioning(false); });
     }
 
     function startSimulation() {
@@ -276,6 +287,7 @@
       setProvisioning(true);
       ctx.clear(attemptPanel);
       attemptPanel.appendChild(ctx.el('p', 'fine', 'Creating an isolated owner-only rehearsal simulation…'));
+      var SP = ctx.progress(attemptPanel, 'Starting the isolated rehearsal attempt');
       ctx.api.rehearsalAttemptStart().then(function (r) {
         if (!isSuccess(r, ['ok'])) { throw Object.assign(new Error('Could not start the rehearsal simulation.'), { code: ctx.responseCode(r) }); }
         var data = ctx.responseData(r);
@@ -322,6 +334,7 @@
               responses[id] = item.type === 'MSQ' ? chosen : (chosen[0] || '');
             }
           });
+          var SB = ctx.progress(attemptPanel, 'Scoring the rehearsal answers');
           ctx.api.rehearsalAttemptSubmit(data.simulation_id, responses).then(function (result) {
             if (!isSuccess(result, ['ok'])) { throw Object.assign(new Error('The rehearsal simulation could not be scored.'), { code: ctx.responseCode(result) }); }
             var score = ctx.responseData(result);
@@ -333,6 +346,7 @@
             });
             attemptPanel.appendChild(ctx.el('p', 'fine', 'Simulation only. No production attempt or persistent result was created. The production exam-start hold remains OFF.'));
           }).catch(function (e) {
+            SB.done();
             attemptPanel.appendChild(ctx.el('p', 'fine is-error', ctx.plainError(e)));
             submit.disabled = false;
           });
@@ -341,31 +355,38 @@
       }).catch(function (e) {
         ctx.clear(attemptPanel);
         attemptPanel.appendChild(ctx.el('p', 'fine is-error', ctx.plainError(e)));
-      }).then(function () { setProvisioning(false); });
+      }).then(function () { SP.done(); setProvisioning(false); });
     }
 
     function removeRehearsal() {
       if (provisioning) { return; }
       if (!removeConfirmInput || removeConfirmInput.value !== REHEARSAL_ID) { tellFixture('Type ' + REHEARSAL_ID + ' exactly to confirm cleanup.', 'error'); return; }
       setProvisioning(true); tellFixture('Removing only the reserved synthetic rehearsal paper and linked fixture rows…', 'warning');
+      var RP = ctx.progress(progressArea, 'Removing the rehearsal data', 2);
+      RP.go(0, 'Deleting only the reserved synthetic rows');
       ctx.api.rehearsalRemove(REHEARSAL_ID).then(function (r) {
         if (!isSuccess(r, ['ok'])) { throw Object.assign(new Error('Rehearsal cleanup was not confirmed.'), { code: ctx.responseCode(r) }); }
         var d = ctx.responseData(r);
         removeConfirmInput.value = ''; removeButton.disabled = true;
         tellFixture('Synthetic rehearsal removed. Deleted ' + Number(d.counts && d.counts.paper || 0) + ' paper row(s), ' + Number(d.counts && d.counts.questions || 0) + ' question row(s), ' + Number(d.counts && d.counts.key_rows || 0) + ' key rows, and ' + Number(d.counts && d.counts.attempts || 0) + ' attempt row(s). Aggregate question-import provenance and security audit logs are retained.', 'success');
+        RP.go(1, 'Refreshing the paper list');
         return ctx.api.papersList();
-      }).then(function () { canApproveRehearsal = false; setProvisioning(false); run(false); }).catch(function (e) { tellFixture(ctx.plainError(e), 'error'); setProvisioning(false); });
+      }).then(function () { RP.done(); canApproveRehearsal = false; setProvisioning(false); run(false); }).catch(function (e) { RP.fail(); tellFixture(ctx.plainError(e), 'error'); setProvisioning(false); });
     }
     function run(rehearsalOnly) {
       if (running || provisioning) { return; }
       running = true; runButton.disabled = true; if (rehearsalButton) { rehearsalButton.disabled = true; }
-      tell(rehearsalOnly ? 'Checking whether a rehearsal can be run safely…' : 'Checking site files and exam services…', 'info');
+      ctx.clear(status);
+      var RUN = ctx.progress(progressArea, rehearsalOnly ? 'Rehearsal readiness check' : 'Exam journey check', 3);
+      RUN.go(0, 'Checking the site files and the public catalogue address');
       Promise.all([probeSiteAssets(root), probePublicStatus(root)]).then(function (probes) {
         var payload = paperSelect.value ? { paper_id: paperSelect.value } : {};
+        RUN.go(1, 'Asking the private server to check every exam service (the first request can take up to a minute)');
         return ctx.api.flowCheck(payload).then(function (r) {
           if (!isOk(ctx, r)) { var e = new Error('Flow check failed.'); e.code = codeOf(ctx, r); throw e; }
           var d = dataOf(ctx, r), overlay = { 'site_files:assets': probes[0], 'public_backend:public_endpoint': probes[1] };
           var steps = normalizeSteps(root.GateAdminFlow, d, overlay);
+          RUN.go(2, 'Showing the report');
           renderSteps(steps);
           if (rehearsalOnly) {
             tell('Readiness check completed; this button is read-only and created no rehearsal records or attempt. Use the separate synthetic rehearsal controls to create or remove only the reserved fixture. The server-side exam-start release hold remains OFF.', 'warning');
@@ -376,8 +397,9 @@
           var section = root.document.getElementById('admin-console'); if (section) { section.hidden = true; }
           return;
         }
+        RUN.fail();
         tell(ctx.plainError(e), 'error');
-      }).then(function () { running = false; runButton.disabled = provisioning; if (rehearsalButton) { rehearsalButton.disabled = provisioning; } });
+      }).then(function () { RUN.done(); running = false; runButton.disabled = provisioning; if (rehearsalButton) { rehearsalButton.disabled = provisioning; } });
     }
     refresh = run;
     ctx.clear(panel);
@@ -416,11 +438,13 @@
     removeConfirmInput.setAttribute('aria-label', 'Type gate-2026-rehearsal to confirm removal'); removeLabel.appendChild(removeConfirmInput); panel.appendChild(removeLabel);
     removeButton = ctx.button('Remove rehearsal data', removeRehearsal, 'btn-quiet'); removeButton.disabled = true; panel.appendChild(removeButton);
     removeConfirmInput.addEventListener('input', function () { removeButton.disabled = provisioning || removeConfirmInput.value !== REHEARSAL_ID; });
+    progressArea = ctx.el('div', 'admin-progress-area'); panel.appendChild(progressArea);
     banner = ctx.el('div', 'admin-flow-banner flow-yellow'); banner.setAttribute('role', 'status'); banner.setAttribute('aria-live', 'polite'); panel.appendChild(banner);
     list = ctx.el('div', 'admin-flow-steps'); panel.appendChild(list);
     status = ctx.el('div', 'admin-status-area'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); panel.appendChild(status);
     fixtureStatus = ctx.el('div', 'admin-status-area admin-rehearsal-status'); fixtureStatus.setAttribute('role', 'status'); fixtureStatus.setAttribute('aria-live', 'polite'); panel.appendChild(fixtureStatus);
     var paperStatus = ctx.el('p', 'fine', 'Loading registered papers…'); panel.appendChild(paperStatus);
+    var PL = ctx.progress(progressArea, 'Loading registered papers');
     ctx.api.papersList().then(function (r) {
       if (!isOk(ctx, r)) { throw Object.assign(new Error('Could not load papers.'), { code: codeOf(ctx, r) }); }
       var d = dataOf(ctx, r), papers = Array.isArray(d.papers) ? d.papers : [];
@@ -430,7 +454,7 @@
       approveRehearsalButton.disabled = !canApproveRehearsal;
       paperStatus.textContent = papers.length ? papers.length + ' registered paper(s) available.' : 'No registered papers. The paper step will be reported as blocked until a paper is registered.';
       if (!papers.length) { paperStatus.className = 'fine is-error'; }
-    }).catch(function (e) { paperStatus.textContent = ctx.plainError(e); paperStatus.className = 'fine is-error'; });
+    }).catch(function (e) { paperStatus.textContent = ctx.plainError(e); paperStatus.className = 'fine is-error'; }).then(function () { PL.done(); });
     run(false);
   }
   consoleApi.registerTab({ id: 'journey', label: 'Journey', mount: mountJourney });

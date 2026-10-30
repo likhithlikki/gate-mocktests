@@ -28,6 +28,8 @@
     var status, paperSelect, paperSummary, uploadHost, gridHost, modeRow, modeUploadButton, modeGridButton;
     var nameInput, urlInput, retrievedInput, publishedInput, pdfInput, hashLine, stageSelect, sectionInput, verifierInput;
     var keyInput, validationLine, issuesBox, coverageLine, stageButton, validateButton, approveButton, batchLine, templateButton;
+    var pdfProgressHost, pdfProgressBar, pdfProgressPercent, pdfProgressPhase, pdfProgressDetail, pdfProgressLive;
+    var pdfHashRun = 0;
 
     function say(text, state) { ctx.clear(status); ctx.message(status, text, state); }
     function safeIssues(list) {
@@ -124,24 +126,75 @@
         say('Parsed ' + rows.length + ' answer-key row(s). Answer values are not displayed.', (parsed.problems && parsed.problems.length) ? 'error' : 'success');
       }).catch(function (e) { var msg = e && typeof e.message === 'string' && e.message ? e.message : ctx.plainError(e); clearRows(false); validationLine.textContent = msg; say(msg, 'error'); });
     }
-    function hashPdf(file) {
-      sourceHash = ''; hashLine.textContent = 'No PDF fingerprint calculated.'; updateActionState();
-      if (!file) { return; }
-      var cryptoApi = root.crypto;
-      if (!cryptoApi || !cryptoApi.subtle || typeof cryptoApi.subtle.digest !== 'function') {
-        pdfInput.value = ''; say('SHA-256 requires Web Crypto. Open the site over HTTPS in a current browser.', 'error'); return;
+    function formatPdfBytes(value) {
+      value = Math.max(0, Number(value) || 0);
+      if (value < 1024) { return Math.round(value) + ' B'; }
+      if (value < 1024 * 1024) { return (value / 1024).toFixed(1) + ' KB'; }
+      return (value / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+    function updatePdfProgress(snapshot, file, runId) {
+      if (runId !== pdfHashRun || !pdfProgressHost) { return; }
+      snapshot = snapshot || {};
+      pdfProgressHost.hidden = false;
+      pdfProgressHost.className = 'admin-pdf-progress';
+      var phase = String(snapshot.phase || 'reading');
+      if (phase === 'reading') {
+        pdfProgressHost.classList.add('is-active');
+        pdfProgressPhase.textContent = 'Reading PDF locally';
+        if (snapshot.indeterminate || !(Number(snapshot.total) > 0)) {
+          pdfProgressPercent.textContent = '…'; pdfProgressBar.removeAttribute('value');
+          pdfProgressDetail.textContent = 'Reading the selected PDF in this browser. Waiting for file-read progress.';
+        } else {
+          var loaded = Math.max(0, Number(snapshot.loaded) || 0), total = Math.max(1, Number(snapshot.total) || 1);
+          var pct = Math.max(0, Math.min(100, Math.floor((loaded / total) * 100)));
+          pdfProgressPercent.textContent = pct + '%'; pdfProgressBar.value = pct;
+          pdfProgressDetail.textContent = formatPdfBytes(loaded) + ' of ' + formatPdfBytes(total) + ' read';
+        }
+      } else if (phase === 'hashing') {
+        pdfProgressHost.classList.add('is-active');
+        pdfProgressPhase.textContent = 'Calculating SHA-256 fingerprint';
+        pdfProgressPercent.textContent = '…'; pdfProgressBar.removeAttribute('value');
+        pdfProgressDetail.textContent = 'The browser is calculating the fingerprint. Web Crypto does not expose byte-level hash progress, so no percentage is invented.';
+      } else if (phase === 'done') {
+        pdfProgressHost.classList.add('is-success');
+        pdfProgressPhase.textContent = 'PDF fingerprint created successfully';
+        pdfProgressPercent.textContent = '100%'; pdfProgressBar.value = 100;
+        pdfProgressDetail.textContent = String(file && file.name || 'Selected PDF') + ' · ' + formatPdfBytes(snapshot.total || snapshot.loaded) + ' · PDF remains on your device; only its SHA-256 fingerprint is recorded.';
+      } else if (phase === 'error') {
+        pdfProgressHost.classList.add('is-error');
+        pdfProgressPhase.textContent = 'PDF fingerprinting stopped';
+        pdfProgressPercent.textContent = 'Stopped'; pdfProgressBar.removeAttribute('value');
+        pdfProgressDetail.textContent = 'The PDF fingerprint was not created. Correct the issue and select the PDF again.';
       }
-      var read;
-      if (typeof file.arrayBuffer === 'function') { read = file.arrayBuffer(); }
-      else { read = new Promise(function (resolve, reject) {
-        if (typeof root.FileReader !== 'function') { reject(new Error('This browser cannot read the PDF locally.')); return; }
-        var fr = new root.FileReader(); fr.onload = function () { resolve(fr.result); }; fr.onerror = function () { reject(new Error('Could not read the PDF locally.')); }; fr.readAsArrayBuffer(file);
-      }); }
-      Promise.resolve(read).then(function (buffer) { return cryptoApi.subtle.digest('SHA-256', buffer); }).then(function (hash) {
-        sourceHash = Array.prototype.map.call(new Uint8Array(hash), function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+      pdfProgressLive.textContent = pdfProgressPhase.textContent + '. ' + pdfProgressDetail.textContent;
+    }
+    function hashPdf(file) {
+      var runId = ++pdfHashRun;
+      sourceHash = ''; hashLine.textContent = 'No PDF fingerprint calculated.'; updateActionState();
+      if (!file) { if (pdfProgressHost) { pdfProgressHost.hidden = true; } return; }
+      if (!root.GateAdminPdfFingerprint || typeof root.GateAdminPdfFingerprint.compute !== 'function') {
+        pdfInput.value = ''; say('The local PDF fingerprint module did not load. Refresh the page and try again.', 'error'); return;
+      }
+      if (pdfProgressHost) {
+        pdfProgressHost.hidden = false;
+        updatePdfProgress({ phase: 'reading', loaded: 0, total: Number(file.size) || 0, indeterminate: !(Number(file.size) > 0) }, file, runId);
+      }
+      say('Reading the PDF locally and preparing its SHA-256 fingerprint…', '');
+      root.GateAdminPdfFingerprint.compute(file, root.crypto, root.FileReader, function (snapshot) {
+        updatePdfProgress(snapshot, file, runId);
+      }).then(function (result) {
+        if (runId !== pdfHashRun) { return; }
+        sourceHash = result.sha256;
         hashLine.textContent = 'SHA-256 fingerprint: ' + sourceHash.slice(0, 12) + '… (the PDF is not uploaded)';
         pdfInput.value = ''; updateActionState();
-      }).catch(function () { sourceHash = ''; pdfInput.value = ''; hashLine.textContent = 'The PDF fingerprint could not be calculated.'; updateActionState(); });
+        say('PDF fingerprint created successfully for ' + result.name + '. The PDF was read locally and was not uploaded.', 'success');
+      }).catch(function (error) {
+        if (runId !== pdfHashRun) { return; }
+        sourceHash = ''; pdfInput.value = ''; hashLine.textContent = 'The PDF fingerprint could not be calculated.'; updateActionState();
+        var message = error && typeof error.message === 'string' && error.message ? error.message : 'The PDF fingerprint could not be calculated.';
+        updatePdfProgress({ phase: 'error' }, file, runId);
+        say(message, 'error');
+      });
     }
     function stage() {
       if (!localValid || !sourceComplete() || busy) { return; }
@@ -215,19 +268,28 @@
     paperSelect = ctx.el('select'); paperSelect.setAttribute('aria-label', 'Registered paper'); paperLabel.appendChild(paperSelect); panel.appendChild(paperLabel);
     paperSummary = ctx.el('p', 'admin-countline', 'Select a paper.'); panel.appendChild(paperSummary);
 
-    panel.appendChild(ctx.el('h4', '', 'Official source and independent verification'));
+    panel.appendChild(ctx.el('h4', '', 'Source details and independent verification'));
     var sourceGrid = ctx.el('div', 'admin-form-grid');
     function textField(label, type, max) {
       var wrap = ctx.el('label', 'admin-field'); wrap.appendChild(ctx.el('span', '', label)); var input = ctx.el('input'); input.type = type || 'text'; if (max) { input.maxLength = max; } wrap.appendChild(input); sourceGrid.appendChild(wrap); return input;
     }
-    nameInput = textField('Source name', 'text', 200); urlInput = textField('Official answer-key URL', 'url', 500);
+    nameInput = textField('Source name', 'text', 200); urlInput = textField('Source document URL (HTTPS)', 'url', 500);
     retrievedInput = textField('Retrieved date', 'date'); publishedInput = textField('Published date (if known)', 'date');
     stageSelect = ctx.el('select'); [['final','Final'],['provisional','Provisional'],['unknown','Unknown']].forEach(function (p) { var o = ctx.el('option', '', p[1]); o.value = p[0]; stageSelect.appendChild(o); });
     var stageLabel = ctx.el('label', 'admin-field'); stageLabel.appendChild(ctx.el('span', '', 'Source stage')); stageLabel.appendChild(stageSelect); sourceGrid.appendChild(stageLabel);
     sectionInput = textField('Section (default main)', 'text', 64); sectionInput.value = 'main';
     verifierInput = textField('Independent verifier username or email', 'text', 256);
-    var pdfLabel = ctx.el('label', 'admin-field admin-field-wide'); pdfLabel.appendChild(ctx.el('span', '', 'Choose the official answer-key PDF (local fingerprint only)'));
+    var pdfLabel = ctx.el('label', 'admin-field admin-field-wide'); pdfLabel.appendChild(ctx.el('span', '', 'Choose the source PDF (local SHA-256 fingerprint only)'));
     pdfInput = ctx.el('input'); pdfInput.type = 'file'; pdfInput.accept = '.pdf,application/pdf'; pdfLabel.appendChild(pdfInput); sourceGrid.appendChild(pdfLabel);
+    pdfProgressHost = ctx.el('section', 'admin-pdf-progress'); pdfProgressHost.hidden = true; pdfProgressHost.setAttribute('aria-label', 'PDF fingerprint progress');
+    var pdfProgressHead = ctx.el('div', 'admin-pdf-progress-head');
+    pdfProgressPhase = ctx.el('strong', 'admin-pdf-progress-phase', 'Reading PDF locally');
+    pdfProgressPercent = ctx.el('strong', 'admin-pdf-progress-percent', '0%');
+    pdfProgressHead.appendChild(pdfProgressPhase); pdfProgressHead.appendChild(pdfProgressPercent); pdfProgressHost.appendChild(pdfProgressHead);
+    pdfProgressBar = ctx.el('progress', 'admin-pdf-progress-bar'); pdfProgressBar.max = 100; pdfProgressBar.value = 0; pdfProgressBar.setAttribute('aria-label', 'PDF fingerprint progress'); pdfProgressHost.appendChild(pdfProgressBar);
+    pdfProgressDetail = ctx.el('p', 'admin-pdf-progress-detail', 'The PDF is read locally and is not uploaded.'); pdfProgressHost.appendChild(pdfProgressDetail);
+    pdfProgressLive = ctx.el('p', 'admin-pdf-progress-live'); pdfProgressLive.setAttribute('role', 'status'); pdfProgressLive.setAttribute('aria-live', 'polite'); pdfProgressLive.setAttribute('aria-atomic', 'true'); pdfProgressHost.appendChild(pdfProgressLive);
+    sourceGrid.appendChild(pdfProgressHost);
     hashLine = ctx.el('p', 'fine admin-field-wide', 'No PDF fingerprint calculated.'); sourceGrid.appendChild(hashLine);
     panel.appendChild(sourceGrid);
 

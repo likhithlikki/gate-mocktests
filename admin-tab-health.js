@@ -63,8 +63,12 @@
       } else { fallback(); }
     }
     function check() {
-      checkButton.disabled = true; setMessage('Checking owner-only backend readiness…', '');
+      if (checkButton.disabled) { return; }
+      checkButton.disabled = true; ctx.clear(status);
+      var prog = ctx.progress(status, 'Checking backend readiness', 3);
+      prog.go(0, 'Contacting the private server and reading its setup');
       ctx.api.checks().then(function (r) {
+        prog.go(1, 'Reading the report');
         if (ctx.responseCode(r) !== 'ok') { throw Object.assign(new Error('Health check failed.'), { code: ctx.responseCode(r) }); }
         var d = ctx.responseData(r);
         var sections = Array.isArray(d.sections) ? d.sections.slice() : [];
@@ -84,12 +88,14 @@
             });
           }
         }
+        prog.go(2, 'Showing results');
         renderSections(sections);
+        prog.done();
         var fail = lastSections.filter(function (s) { return s.status === 'fail'; }).length;
         var warn = lastSections.filter(function (s) { return s.status === 'warn'; }).length;
         var off = lastSections.filter(function (s) { return s.status === 'off'; }).length;
         setMessage('Checked ' + lastSections.length + ' section(s): ' + fail + ' failed, ' + warn + ' warning(s), ' + off + ' off.', fail ? 'error' : (warn || off ? '' : 'success'));
-      }).catch(function (e) { setMessage(ctx.plainError(e), 'error'); renderSections([]); }).then(function () { checkButton.disabled = false; });
+      }).catch(function (e) { prog.fail(); setMessage(ctx.plainError(e), 'error'); renderSections([]); }).then(function () { prog.done(); checkButton.disabled = false; });
     }
 
     ctx.clear(panel);
