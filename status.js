@@ -235,29 +235,20 @@
   }
 
   function checkPublic() {
-    var api = root.GatePublicApi, items = [];
-    if (!api) { return Promise.resolve(result('api.js did not load.', [it('fail', 'api.js', 'The script did not run.', 'Check that status.html includes api.js and that the file exists (see Website files and data).', 'Connection')])); }
-    if (!api.isConfigured()) { return Promise.resolve(result('Not connected: the address in api.js is not valid.', [publicTransportItem({ code: 'not_configured' })])); }
-    var url = typeof api.endpointUrl === 'function' ? api.endpointUrl() : '', t0 = now(), reached = true;
-    return api.loadCatalogueMetadata().then(function (m) {
-      items.push(it('ok', 'Reachable and publishing', m.count + ' question' + (m.count === 1 ? '' : 's') + ' served, version ' + m.catalogue_version.slice(0, 12) + '\u2026, answered in ' + secs(t0) + '.' + (m.published_at ? ' Published ' + m.published_at + '.' : ''), '', 'Connection'));
-    }, function (e) {
-      items.push(publicTransportItem(e, url));
-      reached = !(e && (e.code === 'connection' || e.code === 'timeout' || e.code === 'not_configured'));
-    }).then(function () {
-      if (typeof api.loadDiagnostics !== 'function') { items.push(it('warn', 'Deep checks unavailable', 'This page\u2019s api.js is an older copy without the diagnostics call.', 'Press Ctrl+F5 to reload the newest scripts.', 'Deep checks')); return null; }
-      if (!reached) { return null; }
-      return api.loadDiagnostics().then(function (d) {
-        var exp = EXPECTED_BUILD['public'];
-        items.push(it(d.build === exp ? 'ok' : 'warn', 'Backend code version', 'The service reports build ' + (d.build || '(none)') + '; this page expects ' + exp + '.', d.build === exp ? '' : 'A different build is running. If it is older, paste the latest PublicCatalogue.gs and Deploy > Manage deployments > Edit > Version: New version.', 'Deep checks'));
-        d.checks.forEach(function (c) { items.push(it(c.state, c.label, c.detail, c.fix, c.group || 'Deep checks')); });
-      }, function (e) {
-        var sc = e && e.serverCode;
-        if (sc === 'diagnostics_off') { items.push(it('info', 'Deep checks are switched off', 'The service can check its own sheet, header columns, every row, property names and more, and report exactly what is wrong. That is off.', 'In the PUBLIC Apps Script project add Script Property STATUS_DIAGNOSTICS = true (if you just pasted new code, also Deploy > New version), then press Check again. Delete the property when finished.', 'Deep checks')); }
-        else if (sc === 'bad_request') { items.push(it('warn', 'Deployed backend has no deep checks', 'The service does not know the diagnostics request, so an older PublicCatalogue.gs is deployed.', 'Paste the latest PublicCatalogue.gs, then Deploy > Manage deployments > Edit > Version: New version.', 'Deep checks')); }
-        else { items.push(it('warn', 'Deep checks failed', 'The diagnostics request ended with ' + (sc || (e && e.code) || 'an error') + '.', 'Press Check again; if it repeats, open Apps Script > Executions.', 'Deep checks')); }
-      });
-    }).then(function () { return result(summarise(items, 'public catalogue service'), items); });
+    var api = root.GatePublicApi;
+    if (!api) {
+      return Promise.resolve(result('The public catalogue adapter did not load.', [
+        it('fail', 'Public catalogue adapter', 'api.js is unavailable on this page.', 'Check the local api.js asset and reload the page.', 'Connection')
+      ]));
+    }
+    if (!api.isConfigured()) {
+      return Promise.resolve(result('The public catalogue endpoint is not configured.', [
+        it('fail', 'Public catalogue endpoint', 'The address in api.js is missing or still a placeholder.', 'Set the deployed public catalogue /exec URL in api.js.', 'Connection')
+      ]));
+    }
+    return Promise.resolve(result('Not testable on this page (strict CSP). Check practice.html.', [
+      it('skip', 'Public Catalogue', "This page uses script-src 'self'; its policy intentionally blocks the JSONP probe required by Apps Script.", "Open practice.html to perform the public catalogue health check. Do not weaken this page's CSP.", 'Connection')
+    ], 'skip'));
   }
 
   /* ================= 4. Private account service ================= */
@@ -314,22 +305,11 @@
     duration_policy_unresolved_d11: 'Duration policy is not decided yet (D-11).'
   };
   function checkExam() {
-    var auth = root.GateAuth, G = 'Connection';
-    if (!auth || !auth.isConfigured()) { return Promise.resolve(result('Needs the private service to be connected first.', [it('skip', 'Exam service', 'The private service address is not valid yet.', 'Fix the private service first.', G)], 'skip')); }
-    var s = auth.readSession();
-    if (!s) { return Promise.resolve(result('Log in to test the exam service. It only answers to a signed-in session.', [it('skip', 'Exam service', 'You are not logged in on this browser.', 'Log in, then press "Check again".', G)], 'skip')); }
-    return auth.call('list_papers', {}, s.token).then(function (r) {
-      var n = r.data && Array.isArray(r.data.papers) ? r.data.papers.length : null;
-      return result(n === null ? 'Exam service answered.' : n + ' paper' + (n === 1 ? '' : 's') + ' available online.', [it('ok', 'Exam service', n === null ? 'Answered.' : n + ' paper(s) available.', '', G)]);
-    }, function (e) {
-      if (e && e.kind === 'server') {
-        if (e.code === 'unauthenticated') { return result('Your session has expired. Log in again to test the exam service.', [it('skip', 'Exam service', 'The session is no longer valid.', 'Log in again, then press Check again.', G)], 'skip'); }
-        if (e.code === 'feature_disabled') { return result('Reachable, but online exams are switched off.', [it('warn', 'Exam service', EXAM_REASON[e.reason] || (e.reason ? 'Gate: ' + e.reason : 'An approval gate is off.'), 'Set the missing approval in the private project\u2019s Script Properties. See SETUP_GUIDE.md.', G)]); }
-        return result('The exam service returned an error (' + (e.code || 'unknown') + ').', [it('fail', 'Exam service', 'Error code ' + (e.code || 'unknown') + (e.reason ? ' (' + e.reason + ')' : '') + '.', 'Open Apps Script > Executions and read the latest error. Run checkPrivateDatabases().', G)]);
-      }
-      return result('Could not reach the exam service.', [privateTransportItem(e, auth.endpointUrl ? auth.endpointUrl() : '')]);
-    });
+    return Promise.resolve(result('Private exam/scoring is not checked on this page.', [
+      it('skip', 'Private Exam/Scoring', 'Not checked here. Authentication status does not prove EXAM_DB availability or scoring readiness.', 'Use the owner-only backend readiness diagnostics and verify EXAM_DB, key integrity and scoring approval separately.', 'Connection')
+    ], 'skip'));
   }
+
   function checkBackup() {
     return Promise.resolve(result('Cannot be checked from a website: it has no web address by design.', [it('skip', 'Private backup service', 'It is run by the owner only and has no web app.', 'In that project\u2019s editor run checkPrivateBackupSetup() and read the log.', 'Connection')], 'skip'));
   }
@@ -410,8 +390,9 @@
     return { state: 'ok', text: 'Everything that can be checked is working.' };
   }
 
+  function istStamp(d) { var p = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Kolkata',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(d||new Date()), m={}; p.forEach(function(x){m[x.type]=x.value;}); return m.day+'-'+m.month+'-'+m.year+' '+m.hour+':'+m.minute+':'+m.second+' IST'; }
   function reportText(results) {
-    var lines = ['GATE Prep Studio status report', 'Time: ' + new Date().toISOString(), 'Page: ' + (root.location ? root.location.href.split('#')[0] : ''), 'Browser: ' + String(root.navigator && root.navigator.userAgent || '').slice(0, 120), ''];
+    var lines = ['GATE Prep Studio status report', 'Time: ' + istStamp(), 'Page: ' + (root.location ? root.location.href.split('#')[0] : ''), 'Browser: ' + String(root.navigator && root.navigator.userAgent || '').slice(0, 120), ''];
     CHECKS.forEach(function (c) {
       var r = results[c.id]; if (!r) { return; }
       lines.push('## ' + c.name + ' [' + r.state.toUpperCase() + '] ' + r.summary);
@@ -437,7 +418,7 @@
     })).then(function () {
       var o = overall(results);
       banner.setAttribute('data-state', o.state); banner.textContent = SYMBOL[o.state] + ' ' + o.text;
-      if (when) { when.textContent = 'Last checked ' + new Date().toLocaleTimeString(); }
+      if (when) { when.textContent = 'Last checked ' + istStamp(); }
       if (rep) { rep.value = reportText(results); }
       running = false; if (btn) { btn.disabled = false; }
     });
@@ -459,5 +440,16 @@
   }
 
   if (typeof module !== 'undefined' && module.exports) { module.exports = { classifyEndpoint: classifyEndpoint, cleanChecks: cleanChecks, maskId: maskId }; }
-  if (doc) { if (doc.readyState === 'loading') { doc.addEventListener('DOMContentLoaded', init); } else { init(); } }
+  function updateServiceSummaryTime() {
+    var node = doc && doc.getElementById('svc-checked');
+    if (node) { node.textContent = 'Checked at ' + istStamp() + '.'; }
+  }
+  if (doc) {
+    updateServiceSummaryTime();
+    if (doc.readyState === 'loading') {
+      doc.addEventListener('DOMContentLoaded', function () { updateServiceSummaryTime(); init(); });
+    } else {
+      init();
+    }
+  }
 })(typeof window !== 'undefined' ? window : this);

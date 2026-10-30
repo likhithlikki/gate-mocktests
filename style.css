@@ -872,3 +872,9 @@ main > .section > .wrap > :nth-child(2) { animation-delay: .6s; } main > .sectio
   .admin-gate-actions > button, .admin-gates-top-actions > button { flex: 1 1 100%; }
   .admin-gate-dialog-actions > button { flex: 1 1 auto; }
 }
+
+
+/* Status-page-only service summary */
+.service-indicators { margin: 1rem auto; padding: 0.8rem 0; border-top: 1px solid var(--line, #ccc); }
+.service-indicators p { margin: 0.35rem 0; }
+.service-indicators h2 { margin-top: 0; }

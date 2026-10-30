@@ -31,7 +31,7 @@
     return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (x < 10 ? '0' : '') + x;
   }
   function fmtDuration(sec) { var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60; return h + ' h ' + m + ' min ' + s + ' s (' + sec + ' seconds)'; }
-  function fmtTime(iso) { var d = new Date(iso); return isNaN(d.getTime()) ? String(iso) : d.toLocaleString(); }
+  function fmtTime(iso) { var d = new Date(iso); return isNaN(d.getTime()) ? String(iso) : d.toLocaleString('en-GB',{timeZone:'Asia/Kolkata',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}) + ' IST'; }
   var ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
   function connectionNote() {

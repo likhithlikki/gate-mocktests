@@ -9,7 +9,7 @@
   function $(id) { return doc.getElementById(id); }
   function el(t, x, c) { var n = doc.createElement(t); if (x !== undefined && x !== null) { n.textContent = x; } if (c) { n.className = c; } return n; }
   function clear(n) { while (n.firstChild) { n.removeChild(n.firstChild); } }
-  function when(i) { if (!i) { return '\u2014'; } var d = new Date(i); return isNaN(d.getTime()) ? String(i) : d.toLocaleString(); }
+  function when(i) { if (!i) { return '\u2014'; } var d = new Date(i); return isNaN(d.getTime()) ? String(i) : d.toLocaleString('en-GB',{timeZone:'Asia/Kolkata',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}) + ' IST'; }
   function dl(pairs) { var d = el('dl', undefined, 'feature-grid'); pairs.forEach(function (p) { var w = el('div'); w.appendChild(el('dt', p[0])); w.appendChild(el('dd', p[1])); d.appendChild(w); }); return d; }
   function holdPlaceholders(on) { Array.prototype.forEach.call(doc.querySelectorAll('[data-placeholder]'), function (n) { n.hidden = on; }); }
   function live(id, build, err) {   /* fills a live container, or an honest unavailable message */

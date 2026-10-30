@@ -22,7 +22,7 @@
 
   var CALLBACK_NAME = 'gatePublicCatalogueCallback';
   /* Fixed, internally allowed operations. A request can never name any other operation. */
-  var OPERATIONS = Object.freeze({ catalogue: 'catalogue', metadata: 'metadata', diag: 'diag' });
+  var OPERATIONS = Object.freeze({ health: 'health', catalogue: 'catalogue', metadata: 'metadata', diag: 'diag' });
   var TIMEOUT_MS = 20000;
   var ENDPOINT_RE = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_\-]{10,200}\/exec$/;
   var VERSION_RE = /^[a-f0-9]{64}$/;
@@ -43,7 +43,7 @@
   function readMeta(payload) {
     var v = payload.catalogue_version, n = payload.count, at = payload.published_at;
     if (typeof v !== 'string' || !VERSION_RE.test(v)) { return null; }
-    if (typeof n !== 'number' || !isFinite(n) || Math.floor(n) !== n || n < 1 || n > MAX_COUNT) { return null; }
+    if (typeof n !== 'number' || !isFinite(n) || Math.floor(n) !== n || n < 0 || n > MAX_COUNT) { return null; }
     if (at !== null && at !== undefined && !(typeof at === 'string' && PUBLISHED_AT_RE.test(at) && !isNaN(new Date(at).getTime()))) { return null; }
     return { catalogue_version: v, count: n, published_at: typeof at === 'string' ? at : null };
   }
@@ -178,6 +178,13 @@
   function loadCatalogueMetadata(options) {
     return request('metadata', readMeta, timeoutOf(options));
   }
+  /* Read-only health response: health is distinct from catalogue content and permits a configured empty sheet. */
+  function loadHealth(options) {
+    return request('health', function (p) {
+      if (p.service !== 'gate-prep-public-catalogue' || !p.checks || typeof p.checks !== 'object' || typeof p.checks.configured !== 'boolean' || typeof p.checks.sheet_found !== 'boolean' || typeof p.checks.columns_ok !== 'boolean' || typeof p.checks.catalogue_count !== 'number') { return null; }
+      return { status: typeof p.status === 'string' ? p.status : 'unknown', checks: p.checks };
+    }, timeoutOf(options));
+  }
 
   /* Deep diagnostics for status.html (read-only; the server answers only while its STATUS_DIAGNOSTICS property is true).
    * Resolves with { build, generated_at, checks: [{ group, id, label, state, detail, fix }] }. Text is returned as data and only ever shown with textContent. */
@@ -196,7 +203,7 @@
   function loadDiagnostics(options) { return request('diag', readDiag, timeoutOf(options)); }
   function endpointUrl() { return ENDPOINT_URL; }
 
-  var api = Object.freeze({ isConfigured: isConfigured, loadPublicCatalogue: loadPublicCatalogue, loadCatalogueMetadata: loadCatalogueMetadata, loadDiagnostics: loadDiagnostics, endpointUrl: endpointUrl, CALLBACK_NAME: CALLBACK_NAME });
+  var api = Object.freeze({ isConfigured: isConfigured, loadPublicCatalogue: loadPublicCatalogue, loadCatalogueMetadata: loadCatalogueMetadata, loadDiagnostics: loadDiagnostics, loadHealth: loadHealth, endpointUrl: endpointUrl, CALLBACK_NAME: CALLBACK_NAME });
   root.GatePublicApi = api;
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; }
 })(typeof window !== 'undefined' ? window : this);

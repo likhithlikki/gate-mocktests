@@ -8,7 +8,7 @@
   <!-- frame-ancestors is not enforced from a meta CSP; configure it as an HTTP response header at the host. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'none'; form-action 'self'">
   <title>System status | GATE Prep Studio</title>
-  <meta name="description" content="Live health check of every backend service behind GATE Prep Studio.">
+  <meta name="description" content="Read-only status and setup diagnostics for GATE Prep Studio services.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff7a4d'/%3E%3Cpath d='M9 17l5 5 9-12' fill='none' stroke='%23fff' stroke-width='3'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://script.google.com" crossorigin>
   <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
@@ -44,7 +44,7 @@
     <section class="section">
       <div class="wrap">
         <h1>System status</h1>
-        <p class="lead">A live check of everything this site depends on: its settings and files, and each backend. Open any card to see every check, what is wrong and how to fix it. Green means working, amber means reachable but something is switched off or needs attention, red means broken.</p>
+        <p class="lead">Read-only checks for website assets, backend setup and owner-controlled readiness. Open any card to see what was checked and how to address issues. Some cross-origin checks are intentionally not run here because this page uses a strict Content Security Policy.</p>
         <p id="status-overall" class="status-overall" data-state="run" role="status" aria-live="polite">&hellip; Running checks&hellip;</p>
         <noscript><p class="formula" role="note">This page needs JavaScript to run its checks.</p></noscript>
         <ul id="status-list" class="status-list"></ul>
@@ -54,6 +54,16 @@
           <textarea id="status-report" class="status-report" readonly rows="10" aria-label="Status report text"></textarea>
         </details>
         <p class="fine">These checks are read-only. They send no password, code or personal data. The deep backend checks are off until the owner sets the Script Property STATUS_DIAGNOSTICS to true in that Apps Script project; they never reveal secrets, property values, sheet ids or account data. Turn the property off again when you have finished setting up.</p>
+      </div>
+    </section>
+    <section class="service-indicators" aria-label="Service status">
+      <div class="wrap">
+        <h2>Service status summary</h2>
+        <p id="svc-public">Public Catalogue: Not testable on this page (strict CSP). Check practice.html.</p>
+        <p id="svc-auth">Private Authentication: See detailed checks above.</p>
+        <p id="svc-exam">Private Exam/Scoring: Not checked here.</p>
+        <p id="svc-backup">Private Backup: Owner-run — not publicly exposed.</p>
+        <small id="svc-checked"></small>
       </div>
     </section>
     <section id="admin-console" class="section" hidden aria-labelledby="admin-console-heading">
@@ -94,7 +104,7 @@
       </nav>
     </div>
   </footer>
-  <script src="app.js" defer></script>
+<script src="app.js" defer></script>
   <script src="api.js" defer></script>
   <script src="auth.js" defer></script>
   <script src="status.js" defer></script>
