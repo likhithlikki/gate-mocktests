@@ -58,7 +58,7 @@
     return Promise.resolve({ code: 'not_configured', state: 'yellow', reason: 'The endpoint URL is configured, but this strict-CSP page cannot safely probe the cross-origin JSONP response.', where: 'GATE-site/status.html CSP and GATE-site/api.js > GatePublicApi.loadCatalogueMetadata().', fix: 'Verify the public catalogue from the practice page and browser Network panel. Keep the strict script-src policy; do not add the remote endpoint as executable script.' });
   }
   function mountJourney(panel, ctx) {
-    var status, fixtureStatus, banner, paperSelect, list, runButton, rehearsalButton, createButton, approveRehearsalButton, removeButton, verifierInput, removeConfirmInput,
+    var status, fixtureStatus, banner, paperSelect, list, runButton, rehearsalButton, createButton, approveRehearsalButton, removeButton, verifierInput, removeConfirmInput, previewButton, attemptButton, previewPanel, attemptPanel,
       lastSteps = [], running = false, provisioning = false, canApproveRehearsal = false;
     function tell(text, state) { ctx.clear(status); ctx.message(status, text, state || 'info'); }
     function tellFixture(text, state) { if (!fixtureStatus) { tell(text, state); return; } ctx.clear(fixtureStatus); ctx.message(fixtureStatus, text, state || 'info'); }
@@ -152,6 +152,8 @@
     function setProvisioning(disabled) {
       provisioning = disabled;
       if (createButton) { createButton.disabled = disabled; }
+      if (previewButton) { previewButton.disabled = disabled; }
+      if (attemptButton) { attemptButton.disabled = disabled; }
       if (removeButton) { removeButton.disabled = disabled || !removeConfirmInput || removeConfirmInput.value !== REHEARSAL_ID; }
       if (runButton) { runButton.disabled = disabled || running; }
       if (rehearsalButton) { rehearsalButton.disabled = disabled || running; }
@@ -232,6 +234,116 @@
         run(false);
       }).catch(function (e) { tellFixture(ctx.plainError(e) + ' Keep the release hold OFF; check the batch and the distinct-enterer/verifier/approver rule before retrying.', 'error'); setProvisioning(false); });
     }
+
+    function renderRehearsalPreview(data) {
+      ctx.clear(previewPanel);
+      previewPanel.appendChild(ctx.el('h4', '', 'Read-only rehearsal preview'));
+      previewPanel.appendChild(ctx.el('p', '', data.title + ' · ' + data.profile + ' · ' + data.total_marks + ' marks · ' + Math.floor(data.duration_seconds / 60) + ' minutes'));
+      previewPanel.appendChild(ctx.el('p', 'fine', 'Synthetic answer keys are shown to the signed-in owner. This preview does not create an attempt or write to any database.'));
+      (data.marking_rules || []).forEach(function (rule) {
+        previewPanel.appendChild(ctx.el('p', '', rule.type + ': ' + rule.rule));
+      });
+      (data.questions || []).forEach(function (question, index) {
+        var card = ctx.el('article', 'admin-flow-check');
+        card.appendChild(ctx.el('strong', '', 'Question ' + (index + 1) + ' · ' + question.type + ' · ' + question.marks + ' mark'));
+        card.appendChild(ctx.el('p', '', question.text));
+        (question.options || []).forEach(function (option) {
+          card.appendChild(ctx.el('p', '', option.id + '. ' + option.text));
+        });
+        var key = (data.answer_keys || []).filter(function (item) { return item.question_id === question.question_id; })[0];
+        card.appendChild(ctx.el('p', 'admin-flow-code', 'Synthetic answer key: ' + (key ? key.answer : 'Not available')));
+        previewPanel.appendChild(card);
+      });
+    }
+
+    function showPreview() {
+      if (provisioning) { return; }
+      setProvisioning(true);
+      ctx.clear(previewPanel);
+      previewPanel.appendChild(ctx.el('p', 'fine', 'Loading the owner-only synthetic fixture preview…'));
+      ctx.api.rehearsalPreview().then(function (r) {
+        if (!isSuccess(r, ['ok'])) { throw Object.assign(new Error('Could not load the rehearsal preview.'), { code: ctx.responseCode(r) }); }
+        renderRehearsalPreview(ctx.responseData(r));
+        tellFixture('Read-only preview loaded. No attempt, answer or result rows were created.', 'success');
+      }).catch(function (e) {
+        ctx.clear(previewPanel);
+        previewPanel.appendChild(ctx.el('p', 'fine is-error', ctx.plainError(e)));
+      }).then(function () { setProvisioning(false); });
+    }
+
+    function startSimulation() {
+      if (provisioning) { return; }
+      setProvisioning(true);
+      ctx.clear(attemptPanel);
+      attemptPanel.appendChild(ctx.el('p', 'fine', 'Creating an isolated owner-only rehearsal simulation…'));
+      ctx.api.rehearsalAttemptStart().then(function (r) {
+        if (!isSuccess(r, ['ok'])) { throw Object.assign(new Error('Could not start the rehearsal simulation.'), { code: ctx.responseCode(r) }); }
+        var data = ctx.responseData(r);
+        ctx.clear(attemptPanel);
+        attemptPanel.appendChild(ctx.el('h4', '', 'Isolated rehearsal attempt'));
+        attemptPanel.appendChild(ctx.el('p', 'fine', 'This is a temporary simulation, not a candidate attempt. It expires automatically and never writes to EXAM_DB attempts or results.'));
+        var responseInputs = Object.create(null);
+        (data.questions || []).forEach(function (question, index) {
+          var card = ctx.el('fieldset', 'admin-flow-check');
+          card.appendChild(ctx.el('legend', '', 'Question ' + (index + 1) + ' · ' + question.type));
+          card.appendChild(ctx.el('p', '', question.text));
+          if (question.type === 'NAT') {
+            var number = ctx.el('input');
+            number.type = 'text'; number.maxLength = 64; number.autocomplete = 'off';
+            number.setAttribute('aria-label', 'Answer for rehearsal question ' + (index + 1));
+            responseInputs[question.question_id] = { type: 'NAT', input: number };
+            card.appendChild(number);
+          } else {
+            var selected = [];
+            (question.options || []).forEach(function (option) {
+              var label = ctx.el('label', 'admin-field');
+              var input = ctx.el('input');
+              input.type = question.type === 'MSQ' ? 'checkbox' : 'radio';
+              input.name = 'rehearsal-' + question.question_id;
+              input.value = option.id;
+              label.appendChild(input);
+              label.appendChild(ctx.el('span', '', option.id + '. ' + option.text));
+              card.appendChild(label);
+              selected.push(input);
+            });
+            responseInputs[question.question_id] = { type: question.type, inputs: selected };
+          }
+          attemptPanel.appendChild(card);
+        });
+        var submit = ctx.button('Submit rehearsal answers', function () {
+          if (submit.disabled) { return; }
+          submit.disabled = true;
+          var responses = {};
+          Object.keys(responseInputs).forEach(function (id) {
+            var item = responseInputs[id];
+            if (item.type === 'NAT') { responses[id] = item.input.value; }
+            else {
+              var chosen = item.inputs.filter(function (input) { return input.checked; }).map(function (input) { return input.value; });
+              responses[id] = item.type === 'MSQ' ? chosen : (chosen[0] || '');
+            }
+          });
+          ctx.api.rehearsalAttemptSubmit(data.simulation_id, responses).then(function (result) {
+            if (!isSuccess(result, ['ok'])) { throw Object.assign(new Error('The rehearsal simulation could not be scored.'), { code: ctx.responseCode(result) }); }
+            var score = ctx.responseData(result);
+            ctx.clear(attemptPanel);
+            attemptPanel.appendChild(ctx.el('h4', '', 'Rehearsal simulation result'));
+            attemptPanel.appendChild(ctx.el('p', '', 'Score: ' + score.total_marks + ' / ' + score.maximum_marks + ' (' + score.percentage + '%)'));
+            (score.details || []).forEach(function (detail, i) {
+              attemptPanel.appendChild(ctx.el('p', '', 'Question ' + (i + 1) + ': ' + (detail.correct ? 'Correct' : 'Incorrect') + ' · ' + detail.awarded_marks + ' / ' + detail.max_marks));
+            });
+            attemptPanel.appendChild(ctx.el('p', 'fine', 'Simulation only. No production attempt or persistent result was created. The production exam-start hold remains OFF.'));
+          }).catch(function (e) {
+            attemptPanel.appendChild(ctx.el('p', 'fine is-error', ctx.plainError(e)));
+            submit.disabled = false;
+          });
+        }, 'btn-primary');
+        attemptPanel.appendChild(submit);
+      }).catch(function (e) {
+        ctx.clear(attemptPanel);
+        attemptPanel.appendChild(ctx.el('p', 'fine is-error', ctx.plainError(e)));
+      }).then(function () { setProvisioning(false); });
+    }
+
     function removeRehearsal() {
       if (provisioning) { return; }
       if (!removeConfirmInput || removeConfirmInput.value !== REHEARSAL_ID) { tellFixture('Type ' + REHEARSAL_ID + ' exactly to confirm cleanup.', 'error'); return; }
@@ -281,6 +393,18 @@
     panel.appendChild(controls);
     panel.appendChild(ctx.el('h4', '', 'Isolated synthetic rehearsal'));
     panel.appendChild(ctx.el('p', 'fine', 'Creates exactly three fake MCQ/MSQ/NAT questions and the reserved gate-2026-rehearsal paper using the normal import, registration, stage and validation routes. The source is a fixed example.invalid marker, not an official answer key. Approval is a separate step for a different active owner; no rehearsal action turns on exam-start gates.'));
+    var simulationControls = ctx.el('div', 'admin-journey-controls');
+    previewButton = ctx.button('Open read-only preview', showPreview, 'btn-quiet');
+    attemptButton = ctx.button('Start isolated rehearsal attempt', startSimulation, 'btn-primary');
+    simulationControls.appendChild(previewButton);
+    simulationControls.appendChild(attemptButton);
+    panel.appendChild(simulationControls);
+    previewPanel = ctx.el('div', 'admin-rehearsal-preview');
+    previewPanel.setAttribute('aria-live', 'polite');
+    panel.appendChild(previewPanel);
+    attemptPanel = ctx.el('div', 'admin-rehearsal-attempt');
+    attemptPanel.setAttribute('aria-live', 'polite');
+    panel.appendChild(attemptPanel);
     var reviewerLabel = ctx.el('label', 'admin-field admin-field-wide'); reviewerLabel.appendChild(ctx.el('span', '', 'Independent verifier identity (not the current owner)'));
     verifierInput = ctx.el('input'); verifierInput.type = 'text'; verifierInput.maxLength = 256; verifierInput.autocomplete = 'off'; verifierInput.setAttribute('aria-label', 'Independent rehearsal key verifier identity');
     reviewerLabel.appendChild(verifierInput); panel.appendChild(reviewerLabel);

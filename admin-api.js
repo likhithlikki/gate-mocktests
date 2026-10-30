@@ -24,6 +24,9 @@
     flowCheck: 'admin_flow_check',
     gatesGet: 'admin_gates_get',
     gatesSet: 'admin_gates_set',
+    rehearsalPreview: 'admin_rehearsal_preview',
+    rehearsalAttemptStart: 'admin_rehearsal_attempt_start',
+    rehearsalAttemptSubmit: 'admin_rehearsal_attempt_submit',
     rehearsalRemove: 'admin_rehearsal_remove'
   });
 
@@ -218,6 +221,11 @@
     flowCheck: function (payload) { return call(OPS.flowCheck, optionalPayload(payload)); },
     gatesGet: function () { return call(OPS.gatesGet, {}); },
     gatesSet: function (payload) { return call(OPS.gatesSet, optionalPayload(payload)); },
+    rehearsalPreview: function () { return call(OPS.rehearsalPreview, {}); },
+    rehearsalAttemptStart: function () { return call(OPS.rehearsalAttemptStart, {}); },
+    rehearsalAttemptSubmit: function (simulationId, responses) {
+      return call(OPS.rehearsalAttemptSubmit, { simulation_id: String(simulationId || ''), responses: optionalPayload(responses) });
+    },
     rehearsalRemove: function (confirmPaperId) { return call(OPS.rehearsalRemove, { confirm: String(confirmPaperId || '') }); },
     importQuestions: importQuestions
   });
