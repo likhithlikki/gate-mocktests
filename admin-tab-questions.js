@@ -242,12 +242,12 @@
       }).catch(function (error) {
         var counts = error && error.progress ? error.progress : { done: 0, total: activeRecords.length };
         var confirmed = Number(counts.done) || 0, total = Number(counts.total) || activeRecords.length;
-        var safeMessage = 'Stopped after ' + confirmed + ' of ' + total + ' questions confirmed. The importer is designed to handle unchanged questions on a repeat import; check the report before retrying. ' + ctx.plainError(error);
+        var safeMessage = counts.message || ('Stopped after ' + confirmed + ' of ' + total + ' questions received a server acknowledgement. ' + ctx.plainError(error));
         parseState.textContent = safeMessage;
         parseState.className = 'admin-message is-error';
         importing = false; fileInput.disabled = false; validateButton.disabled = false;
         importButton.disabled = !hasValidated || validatedProblems.length > 0 || !activeRecords.length;
-        if (progressUi) { progressUi.update({ phase: 'stopped', done: confirmed, total: total, chunk: error && error.progress ? error.progress.chunks : 0, chunks: error && error.progress ? error.progress.chunks : 0, inFlight: false, message: error && error.progress && error.progress.message ? error.progress.message : (ctx.plainError(error) + ' ' + confirmed + ' of ' + total + ' questions confirmed. Repeating the import later is safe for unchanged questions.') }); }
+        if (progressUi) { progressUi.update({ phase: 'stopped', done: confirmed, total: total, chunk: error && error.progress ? error.progress.chunks : 0, chunks: error && error.progress ? error.progress.chunks : 0, inFlight: false, message: safeMessage, outcome: counts.outcome || 'unknown' }); }
       }).then(function () {
         if (typeof root.removeEventListener === 'function') { root.removeEventListener('beforeunload', unloadGuard); }
       });

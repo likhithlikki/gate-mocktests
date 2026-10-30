@@ -71,7 +71,7 @@
     if (code === 'feature_disabled' && reason === 'license_ref_unset') { return 'Set QUESTION_LICENSE_REF in Apps Script first, then retry the question import.'; }
     if (!code && err && err.data && typeof err.data.code === 'string') { code = err.data.code; }
     if (!code && err && err.kind === 'timeout') { code = 'timeout'; }
-    if (!code && err && err.kind === 'connection') { code = 'connection'; }
+    if (!code && err && ['connection', 'bad_response', 'server_error'].indexOf(err.kind) >= 0) { code = err.kind; }
     return ERROR_MESSAGES[code] || ERROR_MESSAGES.server_error;
   }
   function auth() {
@@ -120,7 +120,7 @@
   function codeOf(errOrResult) {
     if (errOrResult && typeof errOrResult.code === 'string') { return errOrResult.code; }
     if (errOrResult && errOrResult.data && typeof errOrResult.data.code === 'string') { return errOrResult.data.code; }
-    if (errOrResult && (errOrResult.kind === 'timeout' || errOrResult.kind === 'connection')) { return errOrResult.kind; }
+    if (errOrResult && ['timeout', 'connection', 'bad_response', 'server_error'].indexOf(errOrResult.kind) >= 0) { return errOrResult.kind; }
     return '';
   }
   function incrementCount(stats, key, value) {
@@ -151,7 +151,10 @@
   }
   var FATAL_IMPORT_CODES = Object.freeze(['feature_disabled', 'bad_request', 'too_large', 'unauthenticated',
     'forbidden_not_owner', 'validation_failed', 'conflict']);
-  var RETRYABLE_IMPORT_CODES = Object.freeze(['timeout', 'connection', 'bad_response', 'server_error', 'try_later', 'busy']);
+  /* Only explicit busy/try_later replies are safe to retry: the server rejected
+   * the request before entering the import writer. Transport failures and server_error
+   * are ambiguous because Apps Script may have committed rows before the response was lost. */
+  var RETRYABLE_IMPORT_CODES = Object.freeze(['busy', 'try_later']);
   function isFatalImportError(err) {
     return FATAL_IMPORT_CODES.indexOf(codeOf(err)) >= 0;
   }
@@ -172,8 +175,9 @@
          * non-ok chunk result as a failed attempt, except the two fatal codes below. */
         throw apiError(code || 'bad_response', null, result);
       }).catch(function (err) {
-        /* Retry only failures that can plausibly clear without changing the request.
-         * Unknown and policy/configuration errors stop immediately. */
+        /* Only a confirmed server-side contention response is retried. A timeout,
+         * connection loss, unreadable response or server_error may happen after writes;
+         * replaying automatically could overlap the still-running doPost. */
         if (isFatalImportError(err) || !isRetryableImportError(err)) { throw err; }
         if (attempt >= MAX_RETRIES + 1) { throw err; }
         var nextAttempt = attempt + 1;
@@ -218,10 +222,21 @@
       return { batch_id: batchId, chunks: chunks.length, progress: { done: stats.done, total: stats.total,
         created: stats.created, updated: stats.updated, unchanged: stats.unchanged, issues: stats.issues }, result: finished };
     }).catch(function (error) {
-      var confirmedMessage = stats.done + ' of ' + stats.total + ' questions confirmed. Repeating the import later is safe for unchanged questions.';
-      var stopMessage = plainError(error) + ' ' + confirmedMessage;
-      if (error && typeof error === 'object') { error.progress = { done: stats.done, total: stats.total, created: stats.created, updated: stats.updated, unchanged: stats.unchanged, issues: stats.issues, chunks: chunks.length, message: stopMessage }; }
-      progress(onProgress, stats, { chunk: stats.currentChunk || chunks.length, chunks: chunks.length, phase: 'stopped', retry: 0, inFlight: false, completedChunks: stats.completedChunks, message: stopMessage });
+      var code = codeOf(error);
+      var ambiguousOutcome = ['timeout', 'connection', 'bad_response', 'server_error'].indexOf(code) >= 0;
+      var confirmedMessage = stats.done + ' of ' + stats.total + ' questions have a server acknowledgement.';
+      var reasonMessage = ambiguousOutcome ? ({
+        timeout: 'The import request timed out while waiting for Apps Script.',
+        connection: 'The browser did not receive a response from Apps Script.',
+        bad_response: 'The response from Apps Script could not be validated.',
+        server_error: 'Apps Script reported a server-side failure.'
+      }[code] || plainError(error)) : plainError(error);
+      var nextStep = ambiguousOutcome
+        ? ' The server may still have saved some or all of this chunk. Do not immediately start another import. Wait for the Apps Script execution to finish, then check the question repository before retrying.'
+        : ' Correct the reported issue or wait for the server to become available, then review the import status before trying again.';
+      var stopMessage = reasonMessage + ' ' + confirmedMessage + nextStep;
+      if (error && typeof error === 'object') { error.progress = { done: stats.done, total: stats.total, created: stats.created, updated: stats.updated, unchanged: stats.unchanged, issues: stats.issues, chunks: chunks.length, outcome: ambiguousOutcome ? 'unknown' : 'not_committed_by_this_attempt', batch_id: batchId, message: stopMessage }; }
+      progress(onProgress, stats, { chunk: stats.currentChunk || chunks.length, chunks: chunks.length, phase: 'stopped', retry: 0, inFlight: false, completedChunks: stats.completedChunks, message: stopMessage, outcome: ambiguousOutcome ? 'unknown' : 'not_committed_by_this_attempt' });
       throw error;
     });
   }

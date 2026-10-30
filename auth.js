@@ -23,6 +23,18 @@
   var AUTH_ENDPOINT_URL = 'https://script.google.com/macros/s/AKfycbyeo-R6JBjmR3g7JqIKrVvvfIMg5SDs09AhDuhA5COOnUhcGCpbyp_vjOAlOSN6ULA/exec';
   var ENDPOINT_RE = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_\-]{10,200}\/exec$/;
   var TIMEOUT_MS = 25000;
+  /* Apps Script Web App calls do not return response headers until doPost finishes.
+   * Imports may legitimately take longer than interactive auth/admin reads, so give
+   * only the chunk/finish operations a larger but still bounded window. */
+  var IMPORT_TIMEOUT_MS = 180000;
+  var IMPORT_OPERATIONS = { admin_import_questions_chunk: 1, admin_import_chunk: 1, admin_import_finish: 1 };
+  function timeoutForOperation(op) { return Object.prototype.hasOwnProperty.call(IMPORT_OPERATIONS, op) ? IMPORT_TIMEOUT_MS : TIMEOUT_MS; }
+  function transportFailure(err, timedOut) {
+    if (err && err.kind) { return err; }
+    if (timedOut || (err && err.name === 'AbortError')) { return failure('timeout', '', 'request_timeout'); }
+    var name = err && typeof err.name === 'string' ? err.name : '';
+    return failure('connection', '', name && /^[A-Za-z]{1,40}$/.test(name) ? name : 'fetch_failed');
+  }
   var STORE_KEY = 'gps.session.v1';
   var RETURN_TO_KEY = 'gps.auth.returnTo.v1';
   var SAFE_RETURN_PAGES = { 'dashboard.html': 1, 'history.html': 1, 'bookmarks.html': 1, 'profile.html': 1 };
@@ -89,32 +101,46 @@
     var body = { op: op, requestId: rid, payload: payload || {} };
     if (sessionToken) { body.sessionToken = sessionToken; }
     var ctl = typeof root.AbortController === 'function' ? new root.AbortController() : null;
-    var timer = ctl ? root.setTimeout(function () { ctl.abort(); }, TIMEOUT_MS) : null;
-    return root.fetch(AUTH_ENDPOINT_URL, {
-      method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body),
-      credentials: 'omit', cache: 'no-store', redirect: 'follow', referrerPolicy: 'no-referrer', signal: ctl ? ctl.signal : undefined
-    }).then(function (res) { return res.text(); }, function () { throw failure('connection'); })
-      .then(function (text) {
-        if (timer) { root.clearTimeout(timer); }
-        var env;
-        try { env = JSON.parse(text); } catch (e) { throw failure('bad_response'); }
-        if (!env || typeof env !== 'object' || Array.isArray(env) || typeof env.ok !== 'boolean' || typeof env.code !== 'string') { throw failure('bad_response'); }
-        if (env.requestId !== undefined && env.requestId !== rid) { throw failure('bad_response'); }
-        if (Array.isArray(strictDataKeys)) {
-          var allowedEnvelope = env.ok ? { ok: 1, code: 1, requestId: 1, data: 1 } : { ok: 1, code: 1, requestId: 1, reason: 1, missing_prerequisites: 1 };
-          if (Object.keys(env).some(function (k) { return !allowedEnvelope[k]; })) { throw failure('bad_response'); }
-          if (env.ok) {
-            if (!env.data || typeof env.data !== 'object' || Array.isArray(env.data)) { throw failure('bad_response'); }
-            var actualKeys = Object.keys(env.data).sort(), wantedKeys = strictDataKeys.slice().sort();
-            if (actualKeys.length !== wantedKeys.length || actualKeys.some(function (k, i) { return k !== wantedKeys[i]; })) { throw failure('bad_response'); }
-          }
-        }
-        if (!env.ok) { throw failure('server', env.code.slice(0, 48), typeof env.reason === 'string' ? env.reason.slice(0, 64) : ''); }
-        return { code: env.code, data: env.data && typeof env.data === 'object' ? env.data : {} };
-      }, function (e) {
-        if (timer) { root.clearTimeout(timer); }
-        throw e && e.kind ? e : failure(e && e.name === 'AbortError' ? 'timeout' : 'connection');
+    var timedOut = false;
+    var timeoutMs = timeoutForOperation(op);
+    var timer = ctl ? root.setTimeout(function () { timedOut = true; ctl.abort(); }, timeoutMs) : null;
+    function clearRequestTimer() { if (timer !== null && timer !== undefined) { root.clearTimeout(timer); timer = null; } }
+    var request;
+    try {
+      request = root.fetch(AUTH_ENDPOINT_URL, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body),
+        credentials: 'omit', cache: 'no-store', redirect: 'follow', referrerPolicy: 'no-referrer', signal: ctl ? ctl.signal : undefined
       });
+    } catch (fetchError) {
+      clearRequestTimer();
+      return Promise.reject(transportFailure(fetchError, timedOut));
+    }
+    return Promise.resolve(request).then(function (res) {
+      if (!res || typeof res.text !== 'function') { throw failure('bad_response'); }
+      return res.text();
+    }).then(function (text) {
+      var env;
+      try { env = JSON.parse(text); } catch (e) { throw failure('bad_response'); }
+      if (!env || typeof env !== 'object' || Array.isArray(env) || typeof env.ok !== 'boolean' || typeof env.code !== 'string') { throw failure('bad_response'); }
+      if (env.requestId !== undefined && env.requestId !== rid) { throw failure('bad_response'); }
+      if (Array.isArray(strictDataKeys)) {
+        var allowedEnvelope = env.ok ? { ok: 1, code: 1, requestId: 1, data: 1 } : { ok: 1, code: 1, requestId: 1, reason: 1, missing_prerequisites: 1 };
+        if (Object.keys(env).some(function (k) { return !allowedEnvelope[k]; })) { throw failure('bad_response'); }
+        if (env.ok) {
+          if (!env.data || typeof env.data !== 'object' || Array.isArray(env.data)) { throw failure('bad_response'); }
+          var actualKeys = Object.keys(env.data).sort(), wantedKeys = strictDataKeys.slice().sort();
+          if (actualKeys.length !== wantedKeys.length || actualKeys.some(function (k, i) { return k !== wantedKeys[i]; })) { throw failure('bad_response'); }
+        }
+      }
+      if (!env.ok) { throw failure('server', env.code.slice(0, 48), typeof env.reason === 'string' ? env.reason.slice(0, 64) : ''); }
+      return { code: env.code, data: env.data && typeof env.data === 'object' ? env.data : {} };
+    }).then(function (result) {
+      clearRequestTimer();
+      return result;
+    }, function (err) {
+      clearRequestTimer();
+      throw transportFailure(err, timedOut);
+    });
   }
 
   /* ---------- password derivation (Web Crypto) ---------- */
