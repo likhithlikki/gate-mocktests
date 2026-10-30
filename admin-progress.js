@@ -71,7 +71,7 @@
       percent.textContent = '0%'; bar.max = 100; bar.value = 0; bar.setAttribute('aria-valuetext', 'Waiting for a file');
       phase.textContent = 'Waiting for a file'; detail.textContent = 'Choose a file to begin.';
       timing.textContent = 'Elapsed 0s'; waitingRow.hidden = true; retry.hidden = true; retry.textContent = ''; live.textContent = '';
-      card.classList.remove('is-error', 'is-success');
+      card.classList.remove('is-error', 'is-success', 'is-active');
     }
     function update(snapshot) {
       snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
@@ -85,6 +85,9 @@
       var message = String(snapshot.message || '');
       if (phaseName === 'done') { pct = 100; }
       else if ((phaseName === 'uploading' || phaseName === 'finishing' || phaseName === 'stopped') && total > 0 && done >= total) { pct = 99; }
+      var activePhase = phaseName === 'reading' || phaseName === 'parsing' || phaseName === 'uploading' || phaseName === 'finishing' ||
+        (phaseName === 'checking' && !(total > 0 && done >= total));
+      if (activePhase) { card.classList.add('is-active'); } else { card.classList.remove('is-active'); }
       if (phaseName === 'reading' || phaseName === 'parsing' || phaseName === 'checking') { startClock(); }
       if (phaseName === 'uploading' || phaseName === 'finishing') { startClock(); }
       percent.textContent = parsing ? '…' : pct + '%'; bar.max = 100;
@@ -116,8 +119,9 @@
         etaAtElapsed = elapsed;
       } else if (phaseName !== 'uploading') { etaBaseSeconds = null; etaAtElapsed = 0; }
       if (startedAt) { updateElapsed(); }
-      if (phaseName === 'done') { card.classList.remove('is-error'); card.classList.add('is-success'); stopClock(); }
-      else if (phaseName === 'stopped') { card.classList.remove('is-success'); card.classList.add('is-error'); stopClock(); }
+      if (phaseName === 'done') { card.classList.remove('is-error', 'is-active'); card.classList.add('is-success'); stopClock(); }
+      else if (phaseName === 'stopped') { card.classList.remove('is-success', 'is-active'); card.classList.add('is-error'); stopClock(); }
+      else if (phaseName === 'checking' && total > 0 && done >= total) { stopClock(); }
       else { card.classList.remove('is-error', 'is-success'); }
       announce(label + '. ' + detail.textContent + (snapshot.inFlight ? '. Waiting for server confirmation.' : ''), phaseName, false);
     }

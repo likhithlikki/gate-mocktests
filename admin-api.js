@@ -44,6 +44,8 @@
     bad_response: 'The server returned an unreadable response. Check the deployment and try again.',
     connection: 'The server could not be reached. Check your connection and retry.',
     timeout: 'The server took too long to respond. Check the import status before retrying.',
+    try_later: 'The server is temporarily unavailable. The import will retry shortly.',
+    busy: 'The server is busy. The import will retry shortly.',
     not_configured: 'The authentication service is not configured. Ask the site owner to check its deployment URL.',
     unknown_op: 'The server does not recognise this admin operation. Deploy the matching backend version.',
     server_error: 'The server could not complete the request. Check its status and retry later.',
@@ -54,9 +56,12 @@
   });
 
   function apiError(code, message, cause) {
-    var e = new Error(message || plainError({ code: code }));
+    var causeData = cause && cause.data && typeof cause.data === 'object' ? cause.data : {};
+    var detail = { code: code || 'server_error', reason: cause && typeof cause.reason === 'string' ? cause.reason : causeData.reason, data: causeData };
+    var e = new Error(message || plainError(detail));
     e.code = code || 'server_error';
     if (cause) { e.cause = cause; }
+    if (detail.reason) { e.reason = detail.reason; }
     return e;
   }
   function plainError(err) {
@@ -115,6 +120,7 @@
   function codeOf(errOrResult) {
     if (errOrResult && typeof errOrResult.code === 'string') { return errOrResult.code; }
     if (errOrResult && errOrResult.data && typeof errOrResult.data.code === 'string') { return errOrResult.data.code; }
+    if (errOrResult && (errOrResult.kind === 'timeout' || errOrResult.kind === 'connection')) { return errOrResult.kind; }
     return '';
   }
   function incrementCount(stats, key, value) {
@@ -143,9 +149,14 @@
     if (extra && typeof extra === 'object') { Object.keys(extra).forEach(function (key) { snapshot[key] = extra[key]; }); }
     try { onProgress(snapshot); } catch (e) { /* a progress display must not interrupt an import */ }
   }
+  var FATAL_IMPORT_CODES = Object.freeze(['feature_disabled', 'bad_request', 'too_large', 'unauthenticated',
+    'forbidden_not_owner', 'validation_failed', 'conflict']);
+  var RETRYABLE_IMPORT_CODES = Object.freeze(['timeout', 'connection', 'bad_response', 'server_error', 'try_later', 'busy']);
   function isFatalImportError(err) {
-    var code = codeOf(err);
-    return code === 'validation_failed' || code === 'forbidden_not_owner';
+    return FATAL_IMPORT_CODES.indexOf(codeOf(err)) >= 0;
+  }
+  function isRetryableImportError(err) {
+    return RETRYABLE_IMPORT_CODES.indexOf(codeOf(err)) >= 0;
   }
   function sendChunk(batchId, seq, questions, onAttempt, chunks, stats) {
     var payload = { batch_id: batchId, seq: seq, questions: questions };
@@ -161,7 +172,9 @@
          * non-ok chunk result as a failed attempt, except the two fatal codes below. */
         throw apiError(code || 'bad_response', null, result);
       }).catch(function (err) {
-        if (isFatalImportError(err)) { throw err; }
+        /* Retry only failures that can plausibly clear without changing the request.
+         * Unknown and policy/configuration errors stop immediately. */
+        if (isFatalImportError(err) || !isRetryableImportError(err)) { throw err; }
         if (attempt >= MAX_RETRIES + 1) { throw err; }
         var nextAttempt = attempt + 1;
         progress(onAttempt, stats, { chunk: seq, chunks: chunks, phase: 'uploading', retry: nextAttempt, inFlight: false, completedChunks: seq - 1 });
@@ -205,8 +218,10 @@
       return { batch_id: batchId, chunks: chunks.length, progress: { done: stats.done, total: stats.total,
         created: stats.created, updated: stats.updated, unchanged: stats.unchanged, issues: stats.issues }, result: finished };
     }).catch(function (error) {
-      if (error && typeof error === 'object') { error.progress = { done: stats.done, total: stats.total, created: stats.created, updated: stats.updated, unchanged: stats.unchanged, issues: stats.issues, chunks: chunks.length }; }
-      progress(onProgress, stats, { chunk: stats.currentChunk || chunks.length, chunks: chunks.length, phase: 'stopped', retry: 0, inFlight: false, completedChunks: stats.completedChunks });
+      var confirmedMessage = stats.done + ' of ' + stats.total + ' questions confirmed. Repeating the import later is safe for unchanged questions.';
+      var stopMessage = plainError(error) + ' ' + confirmedMessage;
+      if (error && typeof error === 'object') { error.progress = { done: stats.done, total: stats.total, created: stats.created, updated: stats.updated, unchanged: stats.unchanged, issues: stats.issues, chunks: chunks.length, message: stopMessage }; }
+      progress(onProgress, stats, { chunk: stats.currentChunk || chunks.length, chunks: chunks.length, phase: 'stopped', retry: 0, inFlight: false, completedChunks: stats.completedChunks, message: stopMessage });
       throw error;
     });
   }

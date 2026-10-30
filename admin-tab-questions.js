@@ -247,7 +247,7 @@
         parseState.className = 'admin-message is-error';
         importing = false; fileInput.disabled = false; validateButton.disabled = false;
         importButton.disabled = !hasValidated || validatedProblems.length > 0 || !activeRecords.length;
-        if (progressUi) { progressUi.update({ phase: 'stopped', done: confirmed, total: total, chunk: error && error.progress ? error.progress.chunks : 0, chunks: error && error.progress ? error.progress.chunks : 0, inFlight: false, message: 'Import did not finish' }); }
+        if (progressUi) { progressUi.update({ phase: 'stopped', done: confirmed, total: total, chunk: error && error.progress ? error.progress.chunks : 0, chunks: error && error.progress ? error.progress.chunks : 0, inFlight: false, message: error && error.progress && error.progress.message ? error.progress.message : (ctx.plainError(error) + ' ' + confirmed + ' of ' + total + ' questions confirmed. Repeating the import later is safe for unchanged questions.') }); }
       }).then(function () {
         if (typeof root.removeEventListener === 'function') { root.removeEventListener('beforeunload', unloadGuard); }
       });
