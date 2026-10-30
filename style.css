@@ -978,3 +978,9 @@ main > .section > .wrap > :nth-child(2) { animation-delay: .6s; } main > .sectio
   .gl-toast-spin, .btn.is-busy::after { animation-duration: 2s; }
   .gl-fill { transition: none; }
 }
+
+/* Answer-keys tab: visible feedback, clear of the sticky header */
+.admin-message, .admin-pdf-progress, .admin-stage-hint { scroll-margin-top: 7rem; scroll-margin-bottom: 4rem; }
+.admin-stage-hint { margin: .4rem 0 .2rem; color: var(--muted); }
+.admin-key-upload .admin-pdf-progress { margin-top: .75rem; }
+.admin-pdf-progress.is-active .admin-pdf-progress-bar { transition: none; }

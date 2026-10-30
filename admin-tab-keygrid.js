@@ -41,10 +41,11 @@
   }
   var progress = null;
   function render(nextQuestions) {
-    if (!host || !context) { return; }
+    if (!host || !context) { if (root.console && root.console.error) { root.console.error('Answer-key grid was asked to render before it was mounted.'); } return; }
     clear(); questions = Array.isArray(nextQuestions) ? nextQuestions.slice() : [];
     if (!questions.length) { host.appendChild(el('p', 'fine', 'Choose a registered paper to load its question types.')); return; }
     host.appendChild(el('p', 'fine', 'Only question number, type, marks and option IDs are shown. Enter answers without question text.'));
+    host.appendChild(el('p', 'admin-message', 'Fill in the answers, then press “Use these keys” at the bottom. Validation and the Stage button react only after that.'));
     var list = el('div', 'admin-key-grid-list');
     questions.forEach(function (q, index) {
       var fs = el('fieldset', 'admin-key-grid-row'); fs.appendChild(el('legend', '', 'Question ' + (index + 1) + ' · ' + String(q.type || 'Unknown') + ' · ' + String(q.marks || '—') + ' mark(s)'));
@@ -79,11 +80,12 @@
     var actionRow = el('div', 'admin-action-row');
     progress = el('p', 'admin-countline', '0 / ' + questions.length + ' answered'); progress.setAttribute('role', 'status'); progress.setAttribute('aria-live', 'polite'); host.appendChild(progress);
     var use = context.button('Use these keys', function () {
-      if (typeof acceptRows === 'function') { acceptRows(buildRows()); if (typeof onMessage === 'function') { onMessage('Manual grid converted to answer-key rows. Review validation before staging.', 'success'); } }
+      if (typeof acceptRows === 'function') { acceptRows(buildRows()); }
     }, 'btn-primary');
     actionRow.appendChild(use);
     var clearButton = context.button('Clear grid', function () {
       render(getQuestions ? getQuestions() : []);
+      if (typeof acceptRows === 'function') { acceptRows([]); }
       if (typeof onMessage === 'function') { onMessage('Manual entries cleared.', ''); }
     }, 'btn-quiet'); actionRow.appendChild(clearButton); host.appendChild(actionRow);
     refreshProgress();
